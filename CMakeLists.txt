@@ -14,6 +14,7 @@ add_library(physics STATIC
         engine/rigid/Joint.cpp
         engine/soft/ParticleSystem.cpp
         engine/soft/Builders.cpp
+        engine/fluid/FluidSystem.cpp
         engine/field/QuadTree.cpp
         engine/field/Fields.cpp
         engine/core/World.cpp

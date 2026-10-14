@@ -1,62 +1,11 @@
 #include "soft/ParticleSystem.h"
+#include "core/ParticleContact.h"
 #include <algorithm>
 #include <cmath>
 
 namespace pe {
 
 namespace {
-
-struct BodyContact {
-    Vec2 normal, point;
-    float depth;
-};
-
-bool contactParticle(const Body& b, Vec2 p, float r, BodyContact& out) {
-    if (b.shape.type == ShapeType::Circle) {
-        Vec2 d = p - b.position;
-        float R = b.shape.radius + r;
-        float distSq = d.lengthSq();
-        if (distSq >= R * R) return false;
-        float dist = std::sqrt(distSq);
-        out.normal = dist > 1e-6f ? d / dist : Vec2{0.0f, 1.0f};
-        out.depth = R - dist;
-        out.point = b.position + out.normal * b.shape.radius;
-        return true;
-    }
-
-    const auto& v = b.worldVertices;
-    const auto& n = b.worldNormals;
-    const size_t count = v.size();
-    float maxSep = -1e30f;
-    size_t face = 0;
-    for (size_t i = 0; i < count; ++i) {
-        float s = dot(n[i], p - v[i]);
-        if (s > r) return false;
-        if (s > maxSep) { maxSep = s; face = i; }
-    }
-    if (maxSep <= 0.0f) {
-        out.normal = n[face];
-        out.depth = r - maxSep;
-        out.point = p - n[face] * maxSep;
-        return true;
-    }
-
-    float bestSq = 1e30f;
-    Vec2 closest;
-    for (size_t i = 0; i < count; ++i) {
-        Vec2 a = v[i], e = v[(i + 1) % count] - a;
-        float t = std::clamp(dot(p - a, e) / e.lengthSq(), 0.0f, 1.0f);
-        Vec2 q = a + e * t;
-        float dSq = (p - q).lengthSq();
-        if (dSq < bestSq) { bestSq = dSq; closest = q; }
-    }
-    if (bestSq >= r * r) return false;
-    float dist = std::sqrt(bestSq);
-    out.normal = (p - closest) / dist;
-    out.depth = r - dist;
-    out.point = closest;
-    return true;
-}
 
 uint32_t hashCell(int x, int y, uint32_t tableSize) {
     uint32_t h = (static_cast<uint32_t>(x) * 92837111u) ^ (static_cast<uint32_t>(y) * 689287499u);
@@ -270,8 +219,8 @@ void ParticleSystem::collideBodies(float h, const std::vector<std::unique_ptr<Bo
         for (const auto& bp : bodies) {
             Body& b = *bp;
             if (!b.collides || !b.aabb.overlaps(box)) continue;
-            BodyContact c;
-            if (!contactParticle(b, p.position, p.radius, c)) continue;
+            ParticleContact c;
+            if (!particleContact(b, p.position, p.radius, c)) continue;
 
             Vec2 r = c.point - b.position;
             float rn = cross(r, c.normal);

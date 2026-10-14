@@ -5,6 +5,7 @@
 #include "rigid/Collision.h"
 #include "rigid/Joint.h"
 #include "soft/ParticleSystem.h"
+#include "fluid/FluidSystem.h"
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -57,6 +58,7 @@ public:
     float magneticFieldAt(Vec2 p) const;
 
     ParticleSystem particles;
+    FluidSystem fluid;
 
     void step(float dt);
 

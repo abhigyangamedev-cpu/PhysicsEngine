@@ -46,6 +46,18 @@ void drawWorld(Renderer& gfx, const World& world, bool showContacts) {
             gfx.polygon(b->worldVertices, c, darker(c));
     }
 
+    const auto& fl = world.fluid;
+    const float fr = fl.particleRadius() * 1.6f;
+    for (size_t i = 0; i < fl.size(); ++i) {
+        uint32_t base = fl.color[i] ? fl.color[i] : 0x2f7fd6ff;
+        float t = std::min(fl.velocity[i].length() / 7.0f, 1.0f);
+        auto mix = [t](uint32_t c, int shift, float target) {
+            return Uint8(((c >> shift) & 0xff) * (1.0f - t) + target * t);
+        };
+        gfx.discBatchAdd(fl.position[i], fr, {mix(base, 24, 200), mix(base, 16, 235), mix(base, 8, 255), 190});
+    }
+    gfx.discBatchFlush();
+
     for (const auto& l : ps.links)
         if (!l.broken) gfx.line(ps.particles[l.a].position, ps.particles[l.b].position, {170, 190, 230, 160});
     for (const auto& p : ps.particles) {
@@ -242,6 +254,13 @@ void App::frame(float dt) {
     case Screen::Home: drawBackdrop(dt); drawHome(); break;
     case Screen::Menu2D: drawBackdrop(dt); drawMenu2D(); break;
     case Screen::Simulation:
+        if (stirring_ && leftHeld_ && dt > 0.0f) {
+            Vec2 m = cam_.toWorld(mouse_);
+            world_.fluid.stir(m, 1.5f, (m - lastMouseWorld_) / std::max(dt, 1e-3f));
+        } else {
+            stirring_ = false;
+        }
+        lastMouseWorld_ = cam_.toWorld(mouse_);
         simulate(world_, dt, true);
         drawFieldOverlays();
         if (showField_) drawFieldLines();
@@ -258,10 +277,14 @@ void App::handleWorldClicks() {
     Vec2 p = cam_.toWorld(mouse_);
     BodyDef d;
     d.position = p;
-    auto click = scenes()[sceneIndex_].click;
+    const Scene& scene = scenes()[sceneIndex_];
+    auto click = scene.click;
     if (leftPressed_) {
         grab_.begin(world_, p);
-        if (!grab_.active() && !(click && click(world_, p, 1))) world_.createBody(Shape::box(0.5f, 0.5f), d);
+        if (!grab_.active() && !(click && click(world_, p, 1))) {
+            if (scene.stir) stirring_ = true;
+            else world_.createBody(Shape::box(0.5f, 0.5f), d);
+        }
     }
     if (rightPressed_ && !(click && click(world_, p, 3))) world_.createBody(Shape::circle(0.5f), d);
     if (middlePressed_) world_.createBody(randomShape(0.6f), d);
@@ -386,11 +409,14 @@ void App::drawSimulation() {
 
     ui_.panel({0, H - 46, W, 46});
     char stats[160];
-    std::snprintf(stats, sizeof stats, "bodies %zu   joints %zu   particles %zu   step %.2f ms", world_.bodies().size(),
-                  world_.joints().size(), world_.particles.particles.size(), stepMs_);
+    std::snprintf(stats, sizeof stats, "bodies %zu   joints %zu   particles %zu   fluid %zu   step %.2f ms",
+                  world_.bodies().size(), world_.joints().size(), world_.particles.particles.size(), world_.fluid.size(),
+                  stepMs_);
     ui_.label(12, H - 38, stats, theme::textDim, 1.25f);
     ui_.label(12, H - 18,
-              "LMB drag / spawn box   RMB ball   MMB shape   wheel zoom   arrows pan   SPACE pause   S step   R reset   ESC menu",
+              scenes()[sceneIndex_].stir
+                  ? "LMB drag body / stir fluid   RMB drop object   MMB shape   wheel zoom   arrows pan   SPACE pause   R reset   ESC menu"
+                  : "LMB drag / spawn box   RMB ball   MMB shape   wheel zoom   arrows pan   SPACE pause   S step   R reset   ESC menu",
               theme::textFaint, 1.0f);
 }
 

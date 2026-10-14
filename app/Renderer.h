@@ -2,6 +2,7 @@
 #include "math/Vec2.h"
 #include <SDL3/SDL.h>
 #include <span>
+#include <vector>
 
 struct Color {
     Uint8 r, g, b, a = 255;
@@ -33,6 +34,10 @@ public:
     void point(pe::Vec2 p, float pixels, Color c);
     void text(float x, float y, const char* str, Color c, float scale = 1.0f);
 
+    // Batched discs for drawing thousands of particles in one call.
+    void discBatchAdd(pe::Vec2 center, float radius, Color c);
+    void discBatchFlush();
+
     // screen-space helpers for UI
     void fillRect(SDL_FRect r, Color c);
     void strokeRect(SDL_FRect r, Color c);
@@ -42,4 +47,6 @@ public:
 private:
     SDL_Renderer* sdl_;
     Camera& cam_;
+    std::vector<SDL_Vertex> batchVerts_;
+    std::vector<int> batchIndices_;
 };

@@ -51,6 +51,8 @@ private:
     pe::Vec2 mouse_;
     bool leftPressed_ = false, rightPressed_ = false, middlePressed_ = false;
     bool leftHeld_ = false;
+    bool stirring_ = false;
+    pe::Vec2 lastMouseWorld_;
 
     void loadScene(int index);
     void openCategory(int category);

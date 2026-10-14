@@ -45,6 +45,7 @@ void World::clear() {
     joints_.clear();
     jointPairs_.clear();
     particles.clear();
+    fluid.clear();
     manifolds_.clear();
     bodies_.clear();
 }
@@ -89,6 +90,9 @@ void World::step(float dt) {
 
         const float ph = h / static_cast<float>(settings.particleIterations);
         for (int i = 0; i < settings.particleIterations; ++i) particles.step(ph, settings.gravity, bodies_);
+        // the fluid takes fewer, larger steps than the rigid solver
+        const int every = std::max(1, settings.substeps / std::max(1, fluid.stepsPerFrame));
+        if ((s + 1) % every == 0) fluid.step(h * every, settings.gravity, bodies_);
     }
     for (auto& b : bodies_) {
         b->force = {};
@@ -123,6 +127,7 @@ void World::detectContacts() {
             Body* b = sorted[j];
             if (b->aabb.min.x > a->aabb.max.x) break;
             if ((a->isStatic && b->isStatic) || !a->collides || !b->collides) continue;
+            if (a->group != 0 && a->group == b->group) continue;
             if (!a->aabb.overlaps(b->aabb)) continue;
             if (!jointPairs_.empty() && jointPairs_.contains(pairKey(a, b))) continue;
 

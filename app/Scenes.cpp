@@ -538,6 +538,111 @@ void exbDriftUpdate(World& w, float) {
     }
 }
 
+// ---- Fluids ----
+
+void tank(World& w, float halfWidth, float height) {
+    addStaticBox(w, {0.0f, -0.5f}, halfWidth + 1.0f, 0.5f);
+    addStaticBox(w, {-halfWidth - 0.5f, height * 0.5f}, 0.5f, height * 0.5f);
+    addStaticBox(w, {halfWidth + 0.5f, height * 0.5f}, 0.5f, height * 0.5f);
+}
+
+Body* floater(World& w, Vec2 pos, Shape shape, float density, float angle = 0.0f) {
+    BodyDef d;
+    d.position = pos;
+    d.angle = angle;
+    d.density = density;
+    d.friction = 0.3f;
+    return w.createBody(shape, d);
+}
+
+void damBreak(World& w) {
+    tank(w, 16.0f, 15.0f);
+    w.fluid.configure(0.25f);
+    w.fluid.addBlock({-16.0f, 0.0f}, {-6.0f, 12.0f});
+    addStaticBox(w, {4.0f, 1.0f}, 0.4f, 1.0f);
+    addStaticBox(w, {10.0f, 2.0f}, 2.5f, 0.15f, 0.5f);
+    floater(w, {7.0f, 0.6f}, Shape::box(0.6f, 0.6f), 0.6f);
+}
+
+void buoyancy(World& w) {
+    tank(w, 16.0f, 12.0f);
+    w.fluid.configure(0.25f);
+    w.fluid.addBlock({-16.0f, 0.0f}, {16.0f, 4.5f});
+    floater(w, {-12.0f, 7.0f}, Shape::box(0.8f, 0.8f), 0.25f);
+    floater(w, {-7.0f, 7.0f}, Shape::box(0.8f, 0.8f), 0.5f);
+    floater(w, {-2.0f, 7.0f}, Shape::box(0.8f, 0.8f), 0.85f);
+    floater(w, {3.0f, 7.0f}, Shape::circle(0.7f), 2.5f);
+    floater(w, {9.0f, 7.0f}, Shape::box(3.0f, 0.3f), 0.4f);
+    floater(w, {13.5f, 8.0f}, Shape::polygon({{-1.0f, 0.6f}, {1.0f, 0.6f}, {0.6f, -0.4f}, {-0.6f, -0.4f}}), 0.3f);
+}
+
+bool buoyancyClick(World& w, Vec2 p, int button) {
+    if (button != 3) return false;
+    floater(w, p, randomShape(randf(0.4f, 0.8f)), randf(0.2f, 1.5f), randf(0.0f, 3.0f));
+    return true;
+}
+
+float g_emit = 0.0f;
+
+void waterWheel(World& w) {
+    g_emit = 0.0f;
+    // basin with a drain in the middle of the floor
+    addStaticBox(w, {-9.0f, -0.5f}, 8.0f, 0.5f);
+    addStaticBox(w, {9.0f, -0.5f}, 8.0f, 0.5f);
+    addStaticBox(w, {-17.5f, 6.0f}, 0.5f, 7.0f);
+    addStaticBox(w, {17.5f, 6.0f}, 0.5f, 7.0f);
+    addStaticBox(w, {-9.0f, 11.0f}, 3.5f, 0.15f, -0.25f); // chute
+
+    w.fluid.configure(0.25f);
+    w.fluid.addBlock({-17.0f, 0.0f}, {-11.0f, 3.0f});
+
+    // six paddles pinned to an axle, tied at their tips so they turn as one wheel
+    const Vec2 axle{-2.0f, 6.0f};
+    Body* hub = addAnchor(w, axle);
+    hub->collides = false;
+    constexpr int kPaddles = 6;
+    std::vector<Body*> paddles;
+    for (int i = 0; i < kPaddles; ++i) {
+        float a = 2.0f * std::numbers::pi_v<float> * i / kPaddles;
+        Vec2 dir{std::cos(a), std::sin(a)};
+        BodyDef d;
+        d.position = axle + dir * 2.0f;
+        d.angle = a;
+        d.density = 0.6f;
+        d.group = 1;
+        Body* paddle = w.createBody(Shape::box(1.5f, 0.12f), d);
+        w.createJoint<RevoluteJoint>(hub, paddle, axle);
+        paddles.push_back(paddle);
+    }
+    for (int i = 0; i < kPaddles; ++i) {
+        Body* a = paddles[i];
+        Body* b = paddles[(i + 1) % kPaddles];
+        w.createJoint<DistanceJoint>(a, b, a->position + a->rot.apply({1.5f, 0.0f}), b->position + b->rot.apply({1.5f, 0.0f}));
+        w.createJoint<DistanceJoint>(a, b, a->position + a->rot.apply({-1.0f, 0.0f}), b->position + b->rot.apply({-1.0f, 0.0f}));
+    }
+}
+
+void waterWheelUpdate(World& w, float dt) {
+    g_emit += dt;
+    if (g_emit > 0.05f && w.fluid.size() < 2600) {
+        g_emit = 0.0f;
+        for (int i = 0; i < 4; ++i)
+            w.fluid.addParticle({-12.0f, 12.5f + i * 0.25f}, {5.0f, -1.0f});
+    }
+    w.fluid.removeOutside({{-30.0f, -3.0f}, {30.0f, 40.0f}});
+}
+
+void viscosity(World& w) {
+    addStaticBox(w, {0.0f, -0.5f}, 17.0f, 0.5f);
+    for (float x : {-16.5f, -5.5f, 5.5f, 16.5f}) addStaticBox(w, {x, 4.5f}, 0.25f, 4.5f);
+    w.fluid.configure(0.22f);
+    struct Lane { float x0, visc; uint32_t color; };
+    for (const Lane& l : {Lane{-16.25f, 0.01f, 0x3c8ce7ff}, Lane{-5.25f, 0.12f, 0xd8c14aff}, Lane{5.75f, 0.45f, 0xd9822bff}}) {
+        w.fluid.addBlock({l.x0, 0.0f}, {l.x0 + 3.5f, 7.0f}, l.visc, l.color);
+        addStaticBox(w, {l.x0 + 6.0f, 1.0f}, 0.15f, 1.0f);
+    }
+}
+
 } // namespace
 
 Shape randomShape(float size) {
@@ -563,7 +668,7 @@ const std::vector<Category>& categories() {
         {"Soft Bodies & Cloth", "Tearable cloth, pressure blobs and jelly", nullptr},
         {"Gravity & Orbits", "N-body gravity, orbits and colliding galaxies", nullptr},
         {"Electromagnetism", "Charges in electric and magnetic fields", nullptr},
-        {"Fluids", "SPH liquids, splashes and buoyancy", "Phase 4"},
+        {"Fluids", "Liquids, splashes, buoyancy and viscosity", nullptr},
     };
     return list;
 }
@@ -594,6 +699,14 @@ const std::vector<Scene>& scenes() {
          .cameraCenter = {5.0f, -3.0f}, .cameraScale = 32.0f, .trails = true},
         {.name = "ExB Drift", .category = 4, .setup = exbDrift, .update = exbDriftUpdate, .cameraCenter = {},
          .cameraScale = 34.0f, .trails = true},
+        {.name = "Dam Break", .category = 5, .setup = damBreak, .cameraCenter = {0.0f, 7.0f}, .cameraScale = 30.0f,
+         .stir = true},
+        {.name = "Buoyancy", .category = 5, .setup = buoyancy, .click = buoyancyClick, .cameraCenter = {0.0f, 6.0f},
+         .cameraScale = 30.0f, .stir = true},
+        {.name = "Water Wheel", .category = 5, .setup = waterWheel, .update = waterWheelUpdate,
+         .cameraCenter = {0.0f, 7.0f}, .cameraScale = 30.0f, .stir = true},
+        {.name = "Viscosity", .category = 5, .setup = viscosity, .cameraCenter = {0.0f, 5.0f}, .cameraScale = 30.0f,
+         .stir = true},
     };
     return list;
 }

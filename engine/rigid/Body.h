@@ -16,6 +16,7 @@ struct BodyDef {
     bool isStatic = false;
     bool collides = true;
     bool draggable = false; // lets static bodies be moved by the mouse
+    int group = 0;          // bodies sharing a nonzero group don't collide with each other
 };
 
 class Body {
@@ -31,6 +32,7 @@ public:
     bool isStatic;
     bool collides;
     bool draggable;
+    int group;
     uint32_t id = 0;
 
     Rot rot;

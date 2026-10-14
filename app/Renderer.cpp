@@ -1,5 +1,6 @@
 #include "Renderer.h"
 #include <numbers>
+#include <algorithm>
 #include <vector>
 
 using pe::Vec2;
@@ -81,4 +82,25 @@ void Renderer::strokeRect(SDL_FRect r, Color c) {
 
 float Renderer::textWidth(const char* str, float scale) {
     return static_cast<float>(SDL_strlen(str)) * SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE * scale;
+}
+
+void Renderer::discBatchAdd(Vec2 center, float radius, Color c) {
+    constexpr int kSides = 6;
+    static const Vec2 ring[kSides] = {{1.0f, 0.0f},  {0.5f, 0.866f},  {-0.5f, 0.866f},
+                                      {-1.0f, 0.0f}, {-0.5f, -0.866f}, {0.5f, -0.866f}};
+    const Vec2 s = cam_.toScreen(center);
+    const float r = std::max(radius * cam_.scale, 1.0f);
+    const SDL_FColor fc = toF(c);
+    const int base = static_cast<int>(batchVerts_.size());
+    batchVerts_.push_back({{s.x, s.y}, fc, {0.0f, 0.0f}});
+    for (Vec2 d : ring) batchVerts_.push_back({{s.x + d.x * r, s.y - d.y * r}, fc, {0.0f, 0.0f}});
+    for (int i = 0; i < kSides; ++i) batchIndices_.insert(batchIndices_.end(), {base, base + 1 + i, base + 1 + (i + 1) % kSides});
+}
+
+void Renderer::discBatchFlush() {
+    if (!batchVerts_.empty())
+        SDL_RenderGeometry(sdl_, nullptr, batchVerts_.data(), static_cast<int>(batchVerts_.size()), batchIndices_.data(),
+                           static_cast<int>(batchIndices_.size()));
+    batchVerts_.clear();
+    batchIndices_.clear();
 }

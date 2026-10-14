@@ -19,6 +19,7 @@ struct Scene {
     float cameraScale = 40.0f;
     bool trails = false;
     bool fieldLines = false;
+    bool stir = false; // left-drag on empty space stirs the fluid
 };
 
 const std::vector<Category>& categories();
