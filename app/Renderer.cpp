@@ -75,6 +75,11 @@ void Renderer::fillRect(SDL_FRect r, Color c) {
     SDL_RenderFillRect(sdl_, &r);
 }
 
+void Renderer::screenLine(float x0, float y0, float x1, float y1, Color c) {
+    SDL_SetRenderDrawColor(sdl_, c.r, c.g, c.b, c.a);
+    SDL_RenderLine(sdl_, x0, y0, x1, y1);
+}
+
 void Renderer::strokeRect(SDL_FRect r, Color c) {
     SDL_SetRenderDrawColor(sdl_, c.r, c.g, c.b, c.a);
     SDL_RenderRect(sdl_, &r);

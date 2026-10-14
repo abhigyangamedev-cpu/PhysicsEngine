@@ -65,6 +65,52 @@ private:
     float motorMass_ = 0.0f, motorImpulse_ = 0.0f, maxMotorImpulse_ = 0.0f;
 };
 
+// A rope from body a up over a fixed pulley at groundA, across to groundB and down to body b.
+// Keeps lengthA + ratio * lengthB from exceeding its initial value and only ever pulls.
+// ratio > 1 is a block and tackle: b hangs from `ratio` strands, so it moves 1/ratio as far as a
+// and is held with ratio times the rope tension.
+class PulleyJoint : public Joint {
+public:
+    PulleyJoint(Body* a, Body* b, Vec2 groundA, Vec2 groundB, Vec2 worldAnchorA, Vec2 worldAnchorB, float ratio = 1.0f);
+
+    Vec2 groundA, groundB;
+    float ratio;
+    float total; // lengthA + ratio * lengthB with the rope taut
+
+    float lengthA() const { return (groundA - anchorA()).length(); }
+    float lengthB() const { return (groundB - anchorB()).length(); }
+    float tension() const { return h_ > 0.0f ? impulse_ / h_ : 0.0f; } // force in the rope, last substep
+
+    void prepare(float h) override;
+    void solve(bool useBias) override;
+    Vec2 anchorA() const override { return a->position + a->rot.apply(localA_); }
+    Vec2 anchorB() const override { return b->position + b->rot.apply(localB_); }
+
+private:
+    Vec2 localA_, localB_, rA_, rB_, uA_, uB_;
+    float mass_ = 0.0f, bias_ = 0.0f, impulse_ = 0.0f, h_ = 0.0f;
+    bool slack_ = false;
+    Softness soft_;
+};
+
+// Couples rotations so that ratio * angleA + angleB stays constant. Meshing gears use
+// ratio = radiusA / radiusB (they turn opposite ways); a belt uses -radiusA / radiusB.
+class GearJoint : public Joint {
+public:
+    GearJoint(Body* a, Body* b, float ratio);
+
+    float ratio;
+
+    void prepare(float h) override;
+    void solve(bool useBias) override;
+    Vec2 anchorA() const override { return a->position; }
+    Vec2 anchorB() const override { return b->position; }
+
+private:
+    float reference_, error_ = 0.0f, mass_ = 0.0f, impulse_ = 0.0f;
+    Softness soft_;
+};
+
 // Soft constraint pulling a point on body b toward target. Body a is unused.
 class MouseJoint : public Joint {
 public:

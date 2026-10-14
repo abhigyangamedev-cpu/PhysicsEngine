@@ -1,30 +1,28 @@
 #include "Scenes.h"
+#include "SceneKit.h"
 #include "field/Fields.h"
 #include "soft/Builders.h"
-#include <numbers>
-#include <random>
+#include <cstdarg>
+#include <cstdio>
 #include <deque>
 #include <unordered_map>
 
 using namespace pe;
+using kit::addAnchor;
+using kit::addStaticBox;
+using kit::randf;
+using kit::rng;
+
+void Readout::add(const char* fmt, ...) {
+    char buf[256];
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, args);
+    va_end(args);
+    text.emplace_back(buf);
+}
 
 namespace {
-
-std::mt19937& rng() {
-    static std::mt19937 gen{1337};
-    return gen;
-}
-
-float randf(float lo, float hi) { return std::uniform_real_distribution<float>(lo, hi)(rng()); }
-
-Body* addStaticBox(World& w, Vec2 pos, float hw, float hh, float angle = 0.0f) {
-    BodyDef d;
-    d.position = pos;
-    d.angle = angle;
-    d.isStatic = true;
-    d.friction = 0.6f;
-    return w.createBody(Shape::box(hw, hh), d);
-}
 
 void addBounds(World& w) {
     addStaticBox(w, {0.0f, -0.5f}, 20.0f, 0.5f);
@@ -95,13 +93,6 @@ void dominoes(World& w) {
     ball.position = {-14.5f, 1.5f};
     ball.velocity = {4.0f, 0.0f};
     w.createBody(Shape::circle(0.4f), ball);
-}
-
-Body* addAnchor(World& w, Vec2 pos) {
-    BodyDef d;
-    d.position = pos;
-    d.isStatic = true;
-    return w.createBody(Shape::circle(0.08f), d);
 }
 
 void pendulums(World& w) {
@@ -540,10 +531,13 @@ void exbDriftUpdate(World& w, float) {
 
 // ---- Fluids ----
 
-void tank(World& w, float halfWidth, float height) {
+void tank(World& w, float halfWidth, float height, bool lid = false) {
     addStaticBox(w, {0.0f, -0.5f}, halfWidth + 1.0f, 0.5f);
     addStaticBox(w, {-halfWidth - 0.5f, height * 0.5f}, 0.5f, height * 0.5f);
     addStaticBox(w, {halfWidth + 0.5f, height * 0.5f}, 0.5f, height * 0.5f);
+    if (lid) addStaticBox(w, {0.0f, height + 0.5f}, halfWidth + 1.0f, 0.5f);
+    // anything that still splashes out falls past the floor and is dropped
+    w.fluid.bounds = {{-halfWidth - 10.0f, -3.0f}, {halfWidth + 10.0f, height + 40.0f}};
 }
 
 Body* floater(World& w, Vec2 pos, Shape shape, float density, float angle = 0.0f) {
@@ -556,7 +550,8 @@ Body* floater(World& w, Vec2 pos, Shape shape, float density, float angle = 0.0f
 }
 
 void damBreak(World& w) {
-    tank(w, 16.0f, 15.0f);
+    // closed like the classic dam-break experiment: the jet off the obstacle reaches well past 15 m
+    tank(w, 16.0f, 15.0f, true);
     w.fluid.configure(0.25f);
     w.fluid.addBlock({-16.0f, 0.0f}, {-6.0f, 12.0f});
     addStaticBox(w, {4.0f, 1.0f}, 0.4f, 1.0f);
@@ -594,6 +589,7 @@ void waterWheel(World& w) {
     addStaticBox(w, {-9.0f, 11.0f}, 3.5f, 0.15f, -0.25f); // chute
 
     w.fluid.configure(0.25f);
+    w.fluid.bounds = {{-30.0f, -3.0f}, {30.0f, 40.0f}}; // water through the drain is dropped
     w.fluid.addBlock({-17.0f, 0.0f}, {-11.0f, 3.0f});
 
     // six paddles pinned to an axle, tied at their tips so they turn as one wheel
@@ -629,13 +625,15 @@ void waterWheelUpdate(World& w, float dt) {
         for (int i = 0; i < 4; ++i)
             w.fluid.addParticle({-12.0f, 12.5f + i * 0.25f}, {5.0f, -1.0f});
     }
-    w.fluid.removeOutside({{-30.0f, -3.0f}, {30.0f, 40.0f}});
 }
 
 void viscosity(World& w) {
     addStaticBox(w, {0.0f, -0.5f}, 17.0f, 0.5f);
     for (float x : {-16.5f, -5.5f, 5.5f, 16.5f}) addStaticBox(w, {x, 4.5f}, 0.25f, 4.5f);
+    // even the thickest fluid splashes past the walls off its dam, so the lanes are closed to keep them apart
+    addStaticBox(w, {0.0f, 9.25f}, 16.75f, 0.25f);
     w.fluid.configure(0.22f);
+    w.fluid.bounds = {{-27.0f, -3.0f}, {27.0f, 50.0f}};
     struct Lane { float x0, visc; uint32_t color; };
     for (const Lane& l : {Lane{-16.25f, 0.01f, 0x3c8ce7ff}, Lane{-5.25f, 0.12f, 0xd8c14aff}, Lane{5.75f, 0.45f, 0xd9822bff}}) {
         w.fluid.addBlock({l.x0, 0.0f}, {l.x0 + 3.5f, 7.0f}, l.visc, l.color);
@@ -669,12 +667,19 @@ const std::vector<Category>& categories() {
         {"Gravity & Orbits", "N-body gravity, orbits and colliding galaxies", nullptr},
         {"Electromagnetism", "Charges in electric and magnetic fields", nullptr},
         {"Fluids", "Liquids, splashes, buoyancy and viscosity", nullptr},
+        {"Pulleys & Machines", "Atwood machines, block and tackle, levers and gears", nullptr},
+        {"Oscillations & Waves", "Springs, pendulums, resonance and standing waves", nullptr},
+        {"Collisions & Momentum", "Elastic and inelastic impacts, recoil and billiards", nullptr},
+        {"Projectiles", "Launch angles, air resistance and the monkey and hunter", nullptr},
+        {"Rotation & Rolling", "Rolling races, spin, slip and angular momentum", nullptr},
+        {"Thermodynamics", "Kinetic theory: gas speeds, Brownian motion and diffusion", nullptr},
+        {"Optics", "Ray optics: refraction, prisms, lenses and mirrors", nullptr},
     };
     return list;
 }
 
-const std::vector<Scene>& scenes() {
-    static const std::vector<Scene> list = {
+static std::vector<Scene> coreScenes() {
+    return {
         {.name = "Pyramid", .category = 0, .setup = pyramid},
         {.name = "Shape Rain", .category = 0, .setup = shapeRain},
         {.name = "Friction & Bounce", .category = 0, .setup = frictionAndBounce},
@@ -708,6 +713,20 @@ const std::vector<Scene>& scenes() {
         {.name = "Viscosity", .category = 5, .setup = viscosity, .cameraCenter = {0.0f, 5.0f}, .cameraScale = 30.0f,
          .stir = true},
     };
+}
+
+const std::vector<Scene>& scenes() {
+    static const std::vector<Scene> list = [] {
+        std::vector<Scene> all = coreScenes();
+        // categories 6+ live in app/scenes/, in the same order as categories()
+        int category = 6;
+        for (auto make : {machineScenes, oscillationScenes, collisionScenes, projectileScenes, rotationScenes,
+                          thermoScenes, opticsScenes}) {
+            auto more = make(category++);
+            all.insert(all.end(), more.begin(), more.end());
+        }
+        return all;
+    }();
     return list;
 }
 

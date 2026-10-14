@@ -1,6 +1,7 @@
 #include "field/Fields.h"
 #include "core/World.h"
 #include <cmath>
+#include <numbers>
 
 namespace pe {
 
@@ -79,6 +80,45 @@ void UniformMagneticField::apply(World& world, float h) {
         float angle = -b->charge * B * b->invMass * h;
         Rot r(angle);
         b->velocity = r.apply(b->velocity);
+    }
+}
+
+SpringField::Spring& SpringField::add(Body* a, Vec2 worldA, Body* b, Vec2 worldB, float k, float damping) {
+    Spring s{};
+    s.a = a;
+    s.b = b;
+    s.localA = a->rot.applyT(worldA - a->position);
+    s.localB = b ? b->rot.applyT(worldB - b->position) : worldB;
+    s.k = k;
+    s.damping = damping;
+    s.rest = (worldB - worldA).length();
+    springs.push_back(s);
+    return springs.back();
+}
+
+Vec2 SpringField::endA(const Spring& s) const { return s.a->position + s.a->rot.apply(s.localA); }
+
+Vec2 SpringField::endB(const Spring& s) const {
+    if (s.b) return s.b->position + s.b->rot.apply(s.localB);
+    return s.localB + s.drive * std::sin(2.0f * std::numbers::pi_v<float> * s.driveHz * time);
+}
+
+void SpringField::apply(World&, float h) {
+    time += h;
+    const float omega = 2.0f * std::numbers::pi_v<float>;
+    for (const Spring& s : springs) {
+        Vec2 pA = endA(s), pB = endB(s);
+        Vec2 d = pB - pA;
+        float len = d.length();
+        if (len < 1e-6f) continue;
+        Vec2 u = d / len;
+        float stretch = len - s.rest;
+        if (s.pushOnly && stretch >= 0.0f) continue;
+
+        Vec2 vB = s.b ? s.b->velocityAt(pB) : s.drive * (omega * s.driveHz * std::cos(omega * s.driveHz * time));
+        float f = s.k * stretch + s.damping * dot(vB - s.a->velocityAt(pA), u);
+        s.a->applyImpulse(u * (f * h), pA - s.a->position);
+        if (s.b) s.b->applyImpulse(u * (-f * h), pB - s.b->position);
     }
 }
 

@@ -186,6 +186,9 @@ void World::solveJoints(bool useBias) {
 }
 
 void World::applyRestitution() {
+    // A few passes so two-point contacts (a box face) converge together; a single sequential
+    // pass lets the first point's impulse spin the body and the second overshoot.
+    for (int pass = 0; pass < 4; ++pass) {
     for (auto& [key, m] : manifolds_) {
         Body* a = m.a;
         Body* b = m.b;
@@ -202,6 +205,7 @@ void World::applyRestitution() {
             a->applyImpulse(-p, c.rA);
             b->applyImpulse(p, c.rB);
         }
+    }
     }
 }
 

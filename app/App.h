@@ -53,6 +53,7 @@ private:
     bool leftHeld_ = false;
     bool stirring_ = false;
     pe::Vec2 lastMouseWorld_;
+    float menuScroll_ = 0.0f;
 
     void loadScene(int index);
     void openCategory(int category);
@@ -67,5 +68,6 @@ private:
     void drawTrails();
     void drawFieldOverlays();
     void drawFieldLines();
+    void drawReadout();
     void handleWorldClicks();
 };

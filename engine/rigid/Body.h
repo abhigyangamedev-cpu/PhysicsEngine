@@ -17,6 +17,7 @@ struct BodyDef {
     bool collides = true;
     bool draggable = false; // lets static bodies be moved by the mouse
     int group = 0;          // bodies sharing a nonzero group don't collide with each other
+    uint32_t color = 0;     // 0xRRGGBBAA, 0 = renderer default
 };
 
 class Body {
@@ -33,6 +34,7 @@ public:
     bool collides;
     bool draggable;
     int group;
+    uint32_t color;
     uint32_t id = 0;
 
     Rot rot;

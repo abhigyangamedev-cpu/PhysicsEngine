@@ -41,6 +41,7 @@ public:
     // screen-space helpers for UI
     void fillRect(SDL_FRect r, Color c);
     void strokeRect(SDL_FRect r, Color c);
+    void screenLine(float x0, float y0, float x1, float y1, Color c);
     static float textWidth(const char* str, float scale = 1.0f);
     static float textHeight(float scale = 1.0f) { return SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE * scale; }
 

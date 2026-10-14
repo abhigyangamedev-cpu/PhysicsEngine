@@ -13,10 +13,14 @@ constexpr float kTopBar = 52.0f;
 constexpr float kTabBar = 40.0f;
 
 constexpr Color kCategoryColors[] = {
-    {231, 111, 81}, {244, 162, 97}, {42, 157, 143}, {94, 129, 172}, {180, 142, 173}, {72, 170, 220},
+    {231, 111, 81}, {244, 162, 97}, {42, 157, 143}, {94, 129, 172}, {180, 142, 173}, {72, 170, 220}, {214, 160, 72},
+    {120, 190, 110}, {225, 95, 130}, {150, 120, 220}, {90, 190, 190}, {230, 130, 60}, {200, 200, 120},
 };
 
+Color rgba(uint32_t c) { return {Uint8(c >> 24), Uint8(c >> 16), Uint8(c >> 8), Uint8(c)}; }
+
 Color bodyColor(const Body& b) {
+    if (b.color) return rgba(b.color);
     if (b.charge > 0.0f) return {235, 87, 87};
     if (b.charge < 0.0f) return {72, 149, 239};
     if (b.isStatic) return {70, 75, 85};
@@ -28,6 +32,25 @@ Color bodyColor(const Body& b) {
 }
 
 Color darker(Color c) { return {Uint8(c.r * 0.6f), Uint8(c.g * 0.6f), Uint8(c.b * 0.6f), c.a}; }
+
+// Zigzag spring between two points; the coil count stays fixed so stretching is visible.
+void drawCoil(Renderer& gfx, Vec2 a, Vec2 b, Color c) {
+    Vec2 d = b - a;
+    float len = d.length();
+    if (len < 1e-4f) return;
+    Vec2 u = d / len, n = u.perp() * 0.18f;
+    constexpr int kTurns = 12;
+    const float lead = std::min(0.2f, 0.15f * len);
+    Vec2 prev = a + u * lead;
+    gfx.line(a, prev, c);
+    for (int i = 1; i <= kTurns * 2; ++i) {
+        float t = lead + (len - 2.0f * lead) * i / (kTurns * 2);
+        Vec2 p = a + u * t + (i == kTurns * 2 ? Vec2{} : (i % 2 ? n : -n));
+        gfx.line(prev, p, c);
+        prev = p;
+    }
+    gfx.line(prev, b, c);
+}
 
 void drawWorld(Renderer& gfx, const World& world, bool showContacts) {
     const auto& ps = world.particles;
@@ -68,8 +91,32 @@ void drawWorld(Renderer& gfx, const World& world, bool showContacts) {
     for (const auto& a : ps.attachments)
         gfx.line(ps.particles[a.particle].position, a.body->position + a.body->rot.apply(a.localAnchor), {255, 200, 80});
 
+    for (const auto& f : world.fields()) {
+        auto* sf = dynamic_cast<const SpringField*>(f.get());
+        if (!sf) continue;
+        for (const auto& s : sf->springs) {
+            if (s.coil)
+                drawCoil(gfx, sf->endA(s), sf->endB(s), s.pushOnly ? Color{120, 200, 255} : Color{250, 210, 80});
+            else
+                gfx.line(sf->endA(s), sf->endB(s), {220, 220, 230});
+        }
+    }
+
     for (const auto& j : world.joints()) {
         Color c{230, 230, 230};
+        if (dynamic_cast<const GearJoint*>(j.get())) continue; // the gears themselves show it
+        if (auto* p = dynamic_cast<const PulleyJoint*>(j.get())) {
+            const Color rope{200, 150, 90};
+            gfx.line(p->groundA, p->anchorA(), rope);
+            // a block and tackle hangs body b from `ratio` parallel strands
+            const int strands = std::max(1, static_cast<int>(std::lround(p->ratio)));
+            const float spread = p->b->shape.type == ShapeType::Circle ? p->b->shape.radius * 0.8f : 0.3f;
+            for (int k = 0; k < strands; ++k) {
+                float off = strands == 1 ? 0.0f : spread * (2.0f * k / (strands - 1) - 1.0f);
+                gfx.line(p->groundB + Vec2{off, 0.0f}, p->anchorB() + Vec2{off, 0.0f}, rope);
+            }
+            continue;
+        }
         if (auto* d = dynamic_cast<const DistanceJoint*>(j.get())) {
             if (d->rope) c = {200, 150, 90};
             else if (d->hertz > 0.0f) c = {250, 210, 80};
@@ -188,6 +235,7 @@ void App::handleEvent(const SDL_Event& e) {
         break;
     case SDL_EVENT_MOUSE_WHEEL:
         if (screen_ == Screen::Simulation) cam_.scale *= e.wheel.y > 0 ? 1.1f : 1.0f / 1.1f;
+        if (screen_ == Screen::Menu2D) menuScroll_ -= e.wheel.y * 60.0f;
         break;
     case SDL_EVENT_KEY_DOWN: {
         const SDL_Keycode key = e.key.key;
@@ -266,6 +314,7 @@ void App::frame(float dt) {
         if (showField_) drawFieldLines();
         if (showTrails_) drawTrails();
         drawWorld(gfx_, world_, showContacts_);
+        drawReadout();
         drawSimulation();
         if (screen_ == Screen::Simulation && !ui_.overUi()) handleWorldClicks();
         break;
@@ -316,8 +365,8 @@ void App::drawHome() {
 
     char badge[32];
     std::snprintf(badge, sizeof badge, "%zu scenes", scenes().size());
-    if (ui_.card({x0, y, cw, ch}, "2D", "Rigid bodies, joints, springs, soft bodies and cloth",
-                 "Gravity, electromagnetism and fluids on the way", badge, true, theme::accent, 6.0f))
+    if (ui_.card({x0, y, cw, ch}, "2D", "Classical mechanics, waves, heat, fields, fluids and light",
+                 "Rigid and soft bodies, machines, orbits, gases and optics", badge, true, theme::accent, 6.0f))
         screen_ = Screen::Menu2D;
     ui_.card({x0 + cw + gap, y, cw, ch}, "3D", "Rigid bodies and constraints in three dimensions",
              "Planned once the 2D engine is complete", "Coming soon", false, theme::accent, 6.0f);
@@ -327,22 +376,21 @@ void App::drawHome() {
 
 void App::drawMenu2D() {
     const float W = float(cam_.width), H = float(cam_.height);
-    ui_.panel({0, 0, W, kTopBar});
-    if (ui_.button({12, 10, 100, kTopBar - 20}, "< Back")) {
-        screen_ = Screen::Home;
-        return;
-    }
-    ui_.label(132, (kTopBar - Renderer::textHeight(2.0f)) * 0.5f, "2D Simulations", theme::text, 2.0f);
-
     const auto& cats = categories();
     const int cols = W > 1100 ? 3 : (W > 720 ? 2 : 1);
     const float gap = 24.0f, margin = 40.0f;
-    const float cw = std::min(400.0f, (W - 2.0f * margin - (cols - 1) * gap) / cols), ch = 170.0f;
+    const float cw = std::min(400.0f, (W - 2.0f * margin - (cols - 1) * gap) / cols), ch = 160.0f;
     const float gridW = cols * cw + (cols - 1) * gap;
-    const float x0 = (W - gridW) * 0.5f, y0 = kTopBar + 70.0f;
+    const int rows = (static_cast<int>(cats.size()) + cols - 1) / cols;
+    const float contentH = 70.0f + rows * (ch + gap) + 40.0f;
+    const float maxScroll = std::max(0.0f, contentH - (H - kTopBar));
+    menuScroll_ = std::clamp(menuScroll_, 0.0f, maxScroll);
+    const float x0 = (W - gridW) * 0.5f, y0 = kTopBar + 70.0f - menuScroll_;
 
-    ui_.labelCentered(W * 0.5f, kTopBar + 28.0f, "Pick a category", theme::textDim, 1.5f);
+    ui_.labelCentered(W * 0.5f, kTopBar + 28.0f - menuScroll_, "Pick a category", theme::textDim, 1.5f);
 
+    // the cards scroll under the top bar, which is drawn afterwards
+    const bool belowBar = mouse_.y > kTopBar;
     for (int i = 0; i < static_cast<int>(cats.size()); ++i) {
         const auto& c = cats[i];
         SDL_FRect r{x0 + (i % cols) * (cw + gap), y0 + (i / cols) * (ch + gap), cw, ch};
@@ -356,13 +404,30 @@ void App::drawMenu2D() {
         } else {
             details = "Coming in " + std::string(c.status);
         }
+        if (r.y > H || r.y + r.h < kTopBar) continue;
         if (ui_.card(r, c.name, c.description, details.c_str(), playable ? badge : "Locked", playable,
-                     kCategoryColors[i % std::size(kCategoryColors)])) {
+                     kCategoryColors[i % std::size(kCategoryColors)]) &&
+            belowBar) {
             openCategory(i);
             return;
         }
     }
-    ui_.labelCentered(W * 0.5f, H - 40.0f, "ESC to go back", theme::textFaint, 1.25f);
+
+    if (maxScroll > 0.0f) {
+        const float trackH = H - kTopBar - 16.0f, thumbH = std::max(40.0f, trackH * (H - kTopBar) / contentH);
+        const float thumbY = kTopBar + 8.0f + (trackH - thumbH) * menuScroll_ / maxScroll;
+        gfx_.fillRect({W - 10.0f, kTopBar + 8.0f, 4.0f, trackH}, theme::panel);
+        gfx_.fillRect({W - 10.0f, thumbY, 4.0f, thumbH}, theme::border);
+    }
+
+    ui_.panel({0, 0, W, kTopBar});
+    if (ui_.button({12, 10, 100, kTopBar - 20}, "< Back")) {
+        screen_ = Screen::Home;
+        return;
+    }
+    ui_.label(132, (kTopBar - Renderer::textHeight(2.0f)) * 0.5f, "2D Simulations", theme::text, 2.0f);
+    ui_.label(W - 12.0f - Renderer::textWidth("wheel to scroll   ESC back", 1.25f), (kTopBar - Renderer::textHeight(1.25f)) * 0.5f,
+              maxScroll > 0.0f ? "wheel to scroll   ESC back" : "ESC back", theme::textFaint, 1.25f);
 }
 
 void App::drawSimulation() {
@@ -418,6 +483,47 @@ void App::drawSimulation() {
                   ? "LMB drag body / stir fluid   RMB drop object   MMB shape   wheel zoom   arrows pan   SPACE pause   R reset   ESC menu"
                   : "LMB drag / spawn box   RMB ball   MMB shape   wheel zoom   arrows pan   SPACE pause   S step   R reset   ESC menu",
               theme::textFaint, 1.0f);
+}
+
+void App::drawReadout() {
+    auto fn = scenes()[sceneIndex_].readout;
+    if (!fn) return;
+    Readout r;
+    fn(world_, r);
+
+    for (const auto& l : r.lines) gfx_.line(l.a, l.b, rgba(l.color));
+
+    const float s = 1.25f, lineH = Renderer::textHeight(s) + 6.0f, pad = 12.0f;
+    const float histW = 300.0f, histH = 110.0f;
+    const bool hasHist = !r.histogram.empty();
+    float w = hasHist ? histW : 0.0f;
+    for (const auto& t : r.text) w = std::max(w, Renderer::textWidth(t.c_str(), s));
+    if (w == 0.0f) return;
+    float h = r.text.size() * lineH + (hasHist ? histH + 34.0f : 0.0f);
+    const float x = 12.0f, y = kTopBar + kTabBar + 12.0f;
+    ui_.panel({x, y, w + 2 * pad, h + 2 * pad - 6.0f}, {24, 27, 35, 225});
+
+    float ty = y + pad;
+    for (size_t i = 0; i < r.text.size(); ++i, ty += lineH)
+        ui_.label(x + pad, ty, r.text[i].c_str(), i == 0 ? theme::text : theme::textDim, s);
+    if (!hasHist) return;
+
+    ty += 4.0f;
+    ui_.label(x + pad, ty, r.histogramLabel.c_str(), theme::textFaint, 1.0f);
+    ty += 16.0f;
+    float top = 1e-6f;
+    for (float v : r.histogram) top = std::max(top, v);
+    for (float v : r.histogramCurve) top = std::max(top, v);
+    const size_t n = r.histogram.size();
+    const float bw = histW / n, base = ty + histH;
+    for (size_t i = 0; i < n; ++i) {
+        float bh = histH * r.histogram[i] / top;
+        gfx_.fillRect({x + pad + i * bw + 1.0f, base - bh, bw - 2.0f, bh}, {72, 149, 239, 200});
+    }
+    for (size_t i = 1; i < r.histogramCurve.size(); ++i)
+        gfx_.screenLine(x + pad + (i - 0.5f) * bw, base - histH * r.histogramCurve[i - 1] / top, x + pad + (i + 0.5f) * bw,
+                        base - histH * r.histogramCurve[i] / top, {255, 200, 87});
+    gfx_.screenLine(x + pad, base, x + pad + histW, base, theme::border);
 }
 
 void App::recordTrails() {

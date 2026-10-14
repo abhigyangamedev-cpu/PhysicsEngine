@@ -136,6 +136,74 @@ void RevoluteJoint::solve(bool useBias) {
     b->applyImpulse(lambda, rB_);
 }
 
+PulleyJoint::PulleyJoint(Body* a, Body* b, Vec2 groundA, Vec2 groundB, Vec2 worldA, Vec2 worldB, float ratio)
+    : Joint(a, b), groundA(groundA), groundB(groundB), ratio(ratio),
+      total((groundA - worldA).length() + ratio * (groundB - worldB).length()),
+      localA_(a->rot.applyT(worldA - a->position)), localB_(b->rot.applyT(worldB - b->position)) {}
+
+void PulleyJoint::prepare(float h) {
+    h_ = h;
+    rA_ = a->rot.apply(localA_);
+    rB_ = b->rot.apply(localB_);
+    // unit vectors from each body toward its pulley: the direction the rope pulls
+    Vec2 dA = groundA - a->position - rA_, dB = groundB - b->position - rB_;
+    float lenA = dA.length(), lenB = dB.length();
+    uA_ = lenA > 1e-4f ? dA / lenA : Vec2{};
+    uB_ = lenB > 1e-4f ? dB / lenB : Vec2{};
+
+    float crA = cross(rA_, uA_), crB = cross(rB_, uB_);
+    float invK = a->invMass + a->invInertia * crA * crA + ratio * ratio * (b->invMass + b->invInertia * crB * crB);
+    mass_ = invK > 0.0f ? 1.0f / invK : 0.0f;
+
+    float C = lenA + ratio * lenB - total;
+    slack_ = C < 0.0f;
+    bias_ = slack_ ? C / h : C;
+    soft_ = Softness::make(stiffness(h), kDampingRatio, h);
+
+    a->applyImpulse(uA_ * impulse_, rA_);
+    b->applyImpulse(uB_ * (ratio * impulse_), rB_);
+}
+
+void PulleyJoint::solve(bool useBias) {
+    // rate at which the rope is being paid out; tension (a positive impulse) reduces it
+    float cdot = -dot(uA_, a->velocity + cross(a->angularVelocity, rA_)) -
+                 ratio * dot(uB_, b->velocity + cross(b->angularVelocity, rB_));
+    float lambda;
+    if (slack_) {
+        lambda = mass_ * (cdot + bias_); // only engages if the slack would be used up this step
+    } else if (useBias) {
+        lambda = soft_.massScale * mass_ * (cdot + soft_.biasRate * bias_) - soft_.impulseScale * impulse_;
+    } else {
+        lambda = mass_ * cdot;
+    }
+    float old = impulse_;
+    impulse_ = std::max(0.0f, old + lambda); // a rope can't push
+    lambda = impulse_ - old;
+    a->applyImpulse(uA_ * lambda, rA_);
+    b->applyImpulse(uB_ * (ratio * lambda), rB_);
+}
+
+GearJoint::GearJoint(Body* a, Body* b, float ratio)
+    : Joint(a, b), ratio(ratio), reference_(ratio * a->angle + b->angle) {}
+
+void GearJoint::prepare(float h) {
+    error_ = ratio * a->angle + b->angle - reference_;
+    float invK = ratio * ratio * a->invInertia + b->invInertia;
+    mass_ = invK > 0.0f ? 1.0f / invK : 0.0f;
+    soft_ = Softness::make(stiffness(h), kDampingRatio, h);
+    a->angularVelocity += a->invInertia * ratio * impulse_;
+    b->angularVelocity += b->invInertia * impulse_;
+}
+
+void GearJoint::solve(bool useBias) {
+    float cdot = ratio * a->angularVelocity + b->angularVelocity;
+    float lambda = useBias ? -soft_.massScale * mass_ * (cdot + soft_.biasRate * error_) - soft_.impulseScale * impulse_
+                           : -mass_ * cdot;
+    impulse_ += lambda;
+    a->angularVelocity += a->invInertia * ratio * lambda;
+    b->angularVelocity += b->invInertia * lambda;
+}
+
 MouseJoint::MouseJoint(Body* body, Vec2 world)
     : Joint(nullptr, body), target(world), maxForce(1000.0f * body->mass),
       localB_(body->rot.applyT(world - body->position)) {}

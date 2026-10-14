@@ -7,7 +7,7 @@ Body::Body(const Shape& s, const BodyDef& def)
     : shape(s), position(def.position), velocity(def.velocity), angle(def.angle),
       angularVelocity(def.angularVelocity), friction(def.friction), restitution(def.restitution),
       charge(def.charge), isStatic(def.isStatic), collides(def.collides), draggable(def.draggable),
-      group(def.group) {
+      group(def.group), color(def.color) {
     if (isStatic) {
         mass = inertia = invMass = invInertia = 0.0f;
         velocity = {};
