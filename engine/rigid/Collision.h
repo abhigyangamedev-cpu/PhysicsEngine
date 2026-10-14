@@ -12,6 +12,7 @@ struct ContactPoint {
     Vec2 rA, rB;
     float normalMass = 0.0f, tangentMass = 0.0f;
     float bias = 0.0f;
+    float relativeVelocity = 0.0f;
     float normalImpulse = 0.0f, tangentImpulse = 0.0f;
 };
 

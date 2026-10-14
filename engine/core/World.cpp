@@ -22,11 +22,28 @@ Body* World::createBody(const Shape& shape, const BodyDef& def) {
 }
 
 void World::destroyBody(Body* body) {
+    std::erase_if(joints_, [body](const auto& j) { return j->a == body || j->b == body; });
+    rebuildJointPairs();
+    particles.removeBody(body);
     std::erase_if(manifolds_, [body](const auto& kv) { return kv.second.a == body || kv.second.b == body; });
     std::erase_if(bodies_, [body](const auto& p) { return p.get() == body; });
 }
 
+void World::destroyJoint(Joint* joint) {
+    std::erase_if(joints_, [joint](const auto& j) { return j.get() == joint; });
+    rebuildJointPairs();
+}
+
+void World::rebuildJointPairs() {
+    jointPairs_.clear();
+    for (const auto& j : joints_)
+        if (j->a && j->b && !j->collideConnected) jointPairs_.insert(pairKey(j->a, j->b));
+}
+
 void World::clear() {
+    joints_.clear();
+    jointPairs_.clear();
+    particles.clear();
     manifolds_.clear();
     bodies_.clear();
 }
@@ -43,8 +60,21 @@ void World::step(float dt) {
         integrateVelocities(h);
         detectContacts();
         prepareContacts(h);
-        for (int i = 0; i < settings.velocityIterations; ++i) solveContacts();
+        for (auto& j : joints_) j->prepare(h);
+        for (int i = 0; i < settings.velocityIterations; ++i) {
+            solveJoints(true);
+            solveContacts(true);
+        }
         integratePositions(h);
+        // remove the velocity injected by position correction so it doesn't become kinetic energy
+        for (int i = 0; i < settings.relaxIterations; ++i) {
+            solveJoints(false);
+            solveContacts(false);
+        }
+        applyRestitution();
+
+        const float ph = h / static_cast<float>(settings.particleIterations);
+        for (int i = 0; i < settings.particleIterations; ++i) particles.step(ph, settings.gravity, bodies_);
     }
     for (auto& b : bodies_) {
         b->force = {};
@@ -80,6 +110,7 @@ void World::detectContacts() {
             if (b->aabb.min.x > a->aabb.max.x) break;
             if (a->isStatic && b->isStatic) continue;
             if (!a->aabb.overlaps(b->aabb)) continue;
+            if (!jointPairs_.empty() && jointPairs_.contains(pairKey(a, b))) continue;
 
             Manifold m;
             if (!(a->id < b->id ? collide(a, b, m) : collide(b, a, m))) continue;
@@ -104,13 +135,12 @@ void World::detectContacts() {
 }
 
 void World::prepareContacts(float h) {
+    contactSoft_ = Softness::make(std::min(settings.contactHertz, 0.25f / h), settings.contactDampingRatio, h);
     for (auto& [key, m] : manifolds_) {
         Body* a = m.a;
         Body* b = m.b;
         const Vec2 n = m.normal;
         const Vec2 t = cross(n, 1.0f);
-        const float e = std::max(a->restitution, b->restitution);
-
         for (int i = 0; i < m.count; ++i) {
             auto& c = m.contacts[i];
             c.rA = c.point - a->position;
@@ -121,11 +151,9 @@ void World::prepareContacts(float h) {
             float rtA = cross(c.rA, t), rtB = cross(c.rB, t);
             c.tangentMass = 1.0f / (a->invMass + b->invMass + a->invInertia * rtA * rtA + b->invInertia * rtB * rtB);
 
-            float vn = dot(b->velocityAt(c.point) - a->velocityAt(c.point), n);
-            float positionBias = std::min(settings.baumgarte / h * std::max(0.0f, c.depth - settings.penetrationSlop),
-                                          settings.maxCorrectionVelocity);
-            float bounceBias = vn < -settings.restitutionThreshold ? -e * vn : 0.0f;
-            c.bias = std::max(positionBias, bounceBias);
+            c.relativeVelocity = dot(b->velocityAt(c.point) - a->velocityAt(c.point), n);
+            c.bias = std::min(contactSoft_.biasRate * std::max(0.0f, c.depth - settings.penetrationSlop),
+                              settings.maxCorrectionVelocity);
 
             Vec2 p = n * c.normalImpulse + t * c.tangentImpulse;
             a->applyImpulse(-p, c.rA);
@@ -134,7 +162,31 @@ void World::prepareContacts(float h) {
     }
 }
 
-void World::solveContacts() {
+void World::solveJoints(bool useBias) {
+    for (auto& j : joints_) j->solve(useBias);
+}
+
+void World::applyRestitution() {
+    for (auto& [key, m] : manifolds_) {
+        Body* a = m.a;
+        Body* b = m.b;
+        const float e = std::max(a->restitution, b->restitution);
+        if (e == 0.0f) continue;
+        for (int i = 0; i < m.count; ++i) {
+            auto& c = m.contacts[i];
+            if (c.relativeVelocity > -settings.restitutionThreshold || c.normalImpulse == 0.0f) continue;
+            Vec2 dv = b->velocity + cross(b->angularVelocity, c.rB) - a->velocity - cross(a->angularVelocity, c.rA);
+            float vn = dot(dv, m.normal);
+            float old = c.normalImpulse;
+            c.normalImpulse = std::max(old - c.normalMass * (vn + e * c.relativeVelocity), 0.0f);
+            Vec2 p = m.normal * (c.normalImpulse - old);
+            a->applyImpulse(-p, c.rA);
+            b->applyImpulse(p, c.rB);
+        }
+    }
+}
+
+void World::solveContacts(bool useBias) {
     for (auto& [key, m] : manifolds_) {
         Body* a = m.a;
         Body* b = m.b;
@@ -155,8 +207,11 @@ void World::solveContacts() {
             b->applyImpulse(p, c.rB);
 
             dv = b->velocity + cross(b->angularVelocity, c.rB) - a->velocity - cross(a->angularVelocity, c.rA);
-            lambda = c.normalMass * (-dot(dv, n) + c.bias);
             old = c.normalImpulse;
+            if (useBias)
+                lambda = contactSoft_.massScale * c.normalMass * (c.bias - dot(dv, n)) - contactSoft_.impulseScale * old;
+            else
+                lambda = -c.normalMass * dot(dv, n);
             c.normalImpulse = std::max(old + lambda, 0.0f);
             p = n * (c.normalImpulse - old);
             a->applyImpulse(-p, c.rA);

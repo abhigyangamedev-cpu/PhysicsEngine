@@ -62,7 +62,23 @@ void Renderer::point(Vec2 p, float px, Color c) {
     SDL_RenderFillRect(sdl_, &r);
 }
 
-void Renderer::text(float x, float y, const char* str, Color c) {
+void Renderer::text(float x, float y, const char* str, Color c, float scale) {
     SDL_SetRenderDrawColor(sdl_, c.r, c.g, c.b, c.a);
-    SDL_RenderDebugText(sdl_, x, y, str);
+    SDL_SetRenderScale(sdl_, scale, scale);
+    SDL_RenderDebugText(sdl_, x / scale, y / scale, str);
+    SDL_SetRenderScale(sdl_, 1.0f, 1.0f);
+}
+
+void Renderer::fillRect(SDL_FRect r, Color c) {
+    SDL_SetRenderDrawColor(sdl_, c.r, c.g, c.b, c.a);
+    SDL_RenderFillRect(sdl_, &r);
+}
+
+void Renderer::strokeRect(SDL_FRect r, Color c) {
+    SDL_SetRenderDrawColor(sdl_, c.r, c.g, c.b, c.a);
+    SDL_RenderRect(sdl_, &r);
+}
+
+float Renderer::textWidth(const char* str, float scale) {
+    return static_cast<float>(SDL_strlen(str)) * SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE * scale;
 }

@@ -11,6 +11,9 @@ add_library(physics STATIC
         engine/rigid/Shape.cpp
         engine/rigid/Body.cpp
         engine/rigid/Collision.cpp
+        engine/rigid/Joint.cpp
+        engine/soft/ParticleSystem.cpp
+        engine/soft/Builders.cpp
         engine/core/World.cpp
 )
 target_include_directories(physics PUBLIC engine)
@@ -20,6 +23,8 @@ find_package(SDL3 REQUIRED CONFIG)
 
 add_executable(PhysicsEngine
         app/main.cpp
+        app/App.cpp
+        app/Ui.cpp
         app/Renderer.cpp
         app/Scenes.cpp
 )

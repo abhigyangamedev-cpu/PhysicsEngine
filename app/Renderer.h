@@ -29,7 +29,13 @@ public:
     void polygon(std::span<const pe::Vec2> pts, Color fill, Color outline);
     void circle(pe::Vec2 center, float radius, float angle, Color fill, Color outline);
     void point(pe::Vec2 p, float pixels, Color c);
-    void text(float x, float y, const char* str, Color c);
+    void text(float x, float y, const char* str, Color c, float scale = 1.0f);
+
+    // screen-space helpers for UI
+    void fillRect(SDL_FRect r, Color c);
+    void strokeRect(SDL_FRect r, Color c);
+    static float textWidth(const char* str, float scale = 1.0f);
+    static float textHeight(float scale = 1.0f) { return SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE * scale; }
 
 private:
     SDL_Renderer* sdl_;
