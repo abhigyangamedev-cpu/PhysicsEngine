@@ -136,7 +136,7 @@ void ParticleSystem::step(float h, Vec2 gravity, const std::vector<std::unique_p
     solveLinks(alphaScale);
     solvePressures(alphaScale);
     solveAttachments(h, alphaScale);
-    collideParticles();
+    if (selfCollision) collideParticles();
     collideBodies(h, bodies);
 
     const float invH = 1.0f / h;
@@ -269,7 +269,7 @@ void ParticleSystem::collideBodies(float h, const std::vector<std::unique_ptr<Bo
         Aabb box{p.position - Vec2{p.radius, p.radius}, p.position + Vec2{p.radius, p.radius}};
         for (const auto& bp : bodies) {
             Body& b = *bp;
-            if (!b.aabb.overlaps(box)) continue;
+            if (!b.collides || !b.aabb.overlaps(box)) continue;
             BodyContact c;
             if (!contactParticle(b, p.position, p.radius, c)) continue;
 

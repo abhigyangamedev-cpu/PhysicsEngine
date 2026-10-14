@@ -1,7 +1,10 @@
 #include "Scenes.h"
+#include "field/Fields.h"
 #include "soft/Builders.h"
 #include <numbers>
 #include <random>
+#include <deque>
+#include <unordered_map>
 
 using namespace pe;
 
@@ -264,6 +267,277 @@ void softBodies(World& w) {
     w.particles.attach(rope.back(), box);
 }
 
+// ---- Gravity & Orbits ----
+
+Body* addMass(World& w, Vec2 pos, Vec2 vel, float radius, float mass, bool collides = true) {
+    BodyDef d;
+    d.position = pos;
+    d.velocity = vel;
+    d.density = mass / (std::numbers::pi_v<float> * radius * radius);
+    d.collides = collides;
+    d.restitution = 0.2f;
+    return w.createBody(Shape::circle(radius), d);
+}
+
+Vec2 circularVelocity(const Body& center, Vec2 pos, float G, bool clockwise = false) {
+    Vec2 r = pos - center.position;
+    float v = orbitalSpeed(G, center.mass, r.length());
+    Vec2 dir = r.normalized().perp();
+    return center.velocity + (clockwise ? -dir : dir) * v;
+}
+
+void zeroMomentum(World& w) {
+    Vec2 p;
+    float m = 0.0f;
+    for (const auto& b : w.bodies()) {
+        p += b->velocity * b->mass;
+        m += b->mass;
+    }
+    if (m == 0.0f) return;
+    for (const auto& b : w.bodies()) b->velocity -= p / m;
+}
+
+void solarSystem(World& w) {
+    w.settings.gravity = {};
+    w.particles.damping = 0.0f;
+    auto* g = w.addField<NBodyGravity>();
+    g->softening = 0.05f;
+    g->theta = 0.5f;
+
+    Body* sun = addMass(w, {}, {}, 1.2f, 2000.0f);
+    struct Planet { float r, radius, mass; };
+    const Planet planets[] = {{4.5f, 0.22f, 0.4f}, {7.5f, 0.35f, 2.0f}, {11.0f, 0.4f, 6.0f}, {15.0f, 0.3f, 1.0f},
+                              {26.0f, 0.75f, 12.0f}};
+    Body* earthLike = nullptr;
+    for (const auto& pl : planets) {
+        float a = randf(0.0f, 6.28f);
+        Vec2 pos = Vec2{std::cos(a), std::sin(a)} * pl.r;
+        Body* b = addMass(w, pos, circularVelocity(*sun, pos, g->G), pl.radius, pl.mass);
+        if (pl.r == 11.0f) earthLike = b;
+    }
+    Vec2 moonPos = earthLike->position + Vec2{0.6f, 0.0f};
+    addMass(w, moonPos, circularVelocity(*earthLike, moonPos, g->G), 0.12f, 0.02f);
+
+    // asteroid belt between the 4th and 5th planet
+    w.particles.selfCollision = false;
+    const int group = w.particles.newGroup();
+    for (int i = 0; i < 600; ++i) {
+        float a = randf(0.0f, 6.28f), r = randf(19.0f, 21.0f);
+        Vec2 pos = Vec2{std::cos(a), std::sin(a)} * r;
+        uint32_t id = w.particles.addParticle(pos, 1e-4f, 0.04f, group);
+        auto& p = w.particles.particles[id];
+        p.velocity = circularVelocity(*sun, pos, g->G);
+        p.color = 0xa89f91ff;
+    }
+    zeroMomentum(w);
+}
+
+void threeBody(World& w) {
+    w.settings.gravity = {};
+    auto* g = w.addField<NBodyGravity>();
+    g->softening = 0.01f;
+    g->theta = 0.0f;
+
+    // Chenciner-Montgomery figure-eight choreography, scaled by L
+    constexpr float L = 3.0f;
+    const float vs = 1.0f / std::sqrt(L);
+    const Vec2 x1{-0.97000436f, 0.24308753f}, v3{-0.93240737f, -0.86473146f};
+    addMass(w, x1 * L, v3 * (-0.5f * vs), 0.12f, 1.0f, false);
+    addMass(w, -x1 * L, v3 * (-0.5f * vs), 0.12f, 1.0f, false);
+    addMass(w, {}, v3 * vs, 0.12f, 1.0f, false);
+}
+
+void addGalaxy(World& w, Vec2 center, Vec2 velocity, float coreMass, int stars, float radius, bool clockwise,
+               uint32_t color, int group) {
+    Body* core = addMass(w, center, velocity, 0.6f, coreMass, false);
+    constexpr float starMass = 0.05f;
+    for (int i = 0; i < stars; ++i) {
+        float r = 2.0f + radius * std::pow(randf(0.0f, 1.0f), 0.8f);
+        float a = randf(0.0f, 6.28f);
+        Vec2 pos = center + Vec2{std::cos(a), std::sin(a)} * r;
+        float enclosed = coreMass + starMass * stars * (r / (radius + 2.0f));
+        float v = std::sqrt(enclosed / r);
+        Vec2 dir = (pos - center).normalized().perp();
+        uint32_t id = w.particles.addParticle(pos, starMass, 0.05f, group);
+        auto& p = w.particles.particles[id];
+        p.velocity = core->velocity + (clockwise ? -dir : dir) * v;
+        p.color = color;
+    }
+}
+
+void galaxies(World& w) {
+    w.settings.gravity = {};
+    w.settings.substeps = 2;
+    w.settings.particleIterations = 1;
+    w.particles.damping = 0.0f;
+    w.particles.selfCollision = false;
+    auto* g = w.addField<NBodyGravity>();
+    g->softening = 0.5f;
+    g->theta = 0.8f;
+    const int group = w.particles.newGroup();
+    addGalaxy(w, {-28.0f, -10.0f}, {2.4f, 0.6f}, 1000.0f, 1600, 14.0f, false, 0x7fb8ffff, group);
+    addGalaxy(w, {28.0f, 10.0f}, {-2.4f, -0.6f}, 800.0f, 1300, 12.0f, true, 0xffb36bff, group);
+}
+
+void orbitSandbox(World& w) {
+    w.settings.gravity = {};
+    auto* g = w.addField<NBodyGravity>();
+    g->softening = 0.05f;
+    Body* sun = addMass(w, {}, {}, 1.5f, 3000.0f);
+    for (float r : {6.0f, 10.0f, 15.0f}) {
+        Vec2 pos{r, 0.0f};
+        addMass(w, pos, circularVelocity(*sun, pos, g->G), 0.35f, 1.0f);
+    }
+}
+
+bool orbitSandboxClick(World& w, Vec2 p, int button) {
+    const Body* heaviest = nullptr;
+    for (const auto& b : w.bodies())
+        if (!heaviest || b->mass > heaviest->mass) heaviest = b.get();
+    if (!heaviest || (p - heaviest->position).length() < 2.0f) return false;
+    Vec2 v = circularVelocity(*heaviest, p, 1.0f);
+    if (button == 3) v = heaviest->velocity + (v - heaviest->velocity) * 0.55f; // eccentric comet
+    addMass(w, p, v, button == 3 ? 0.2f : randf(0.25f, 0.5f), button == 3 ? 0.05f : 1.0f);
+    return true;
+}
+
+// ---- Electromagnetism ----
+
+Body* addCharge(World& w, Vec2 pos, Vec2 vel, float charge, float radius, float mass, bool collides = true) {
+    BodyDef d;
+    d.position = pos;
+    d.velocity = vel;
+    d.charge = charge;
+    d.collides = collides;
+    d.density = mass / (std::numbers::pi_v<float> * radius * radius);
+    d.restitution = 0.1f;
+    d.friction = 0.2f;
+    return w.createBody(Shape::circle(radius), d);
+}
+
+void addBox(World& w, float hw, float hh) {
+    addStaticBox(w, {0.0f, -hh - 0.5f}, hw + 1.0f, 0.5f);
+    addStaticBox(w, {0.0f, hh + 0.5f}, hw + 1.0f, 0.5f);
+    addStaticBox(w, {-hw - 0.5f, 0.0f}, 0.5f, hh);
+    addStaticBox(w, {hw + 0.5f, 0.0f}, 0.5f, hh);
+}
+
+void coulombCrystal(World& w) {
+    w.settings.gravity = {};
+    w.settings.linearDamping = 0.8f;
+    auto* c = w.addField<CoulombField>();
+    c->k = 3.0f;
+    c->softening = 0.05f;
+    addBox(w, 18.0f, 10.0f);
+    for (int i = 0; i < 96; ++i) {
+        Vec2 pos{-16.0f + (i % 16) * 2.1f + randf(-0.3f, 0.3f), -8.0f + (i / 16) * 3.0f + randf(-0.3f, 0.3f)};
+        bool positive = (i + i / 16) % 2 == 0;
+        addCharge(w, pos, {randf(-1.0f, 1.0f), randf(-1.0f, 1.0f)}, positive ? 1.0f : -1.0f,
+                  positive ? 0.32f : 0.42f, 1.0f);
+    }
+}
+
+void dipole(World& w) {
+    w.settings.gravity = {};
+    auto* c = w.addField<CoulombField>();
+    c->k = 4.0f;
+    c->softening = 0.2f;
+    for (auto [x, q] : {std::pair{-4.0f, 3.0f}, std::pair{4.0f, -3.0f}}) {
+        BodyDef d;
+        d.position = {x, 0.0f};
+        d.isStatic = true;
+        d.draggable = true;
+        d.charge = q;
+        w.createBody(Shape::circle(0.5f), d);
+    }
+    for (int i = 0; i < 6; ++i) {
+        float y = -5.0f + i * 2.0f;
+        if (std::abs(y) < 0.5f) y = 6.0f;
+        addCharge(w, {-12.0f, y}, {2.0f, 0.0f}, 0.15f, 0.12f, 0.05f);
+    }
+}
+
+bool dipoleClick(World& w, Vec2 p, int button) {
+    addCharge(w, p, {}, button == 3 ? -0.15f : 0.15f, 0.12f, 0.05f);
+    return true;
+}
+
+std::unordered_map<uint32_t, float> g_birth;
+std::deque<Body*> g_landed;
+float g_clock = 0.0f, g_emitTimer = 0.0f;
+int g_species = 0;
+
+void spectrometer(World& w) {
+    w.settings.gravity = {};
+    g_birth.clear();
+    g_landed.clear();
+    g_clock = g_emitTimer = 0.0f;
+    g_species = 0;
+
+    auto* B = w.addField<UniformMagneticField>();
+    B->B = 1.0f;
+    B->region.box = {{0.0f, -20.0f}, {30.0f, 20.0f}};
+
+    addStaticBox(w, {-8.5f, 0.0f}, 0.6f, 0.8f)->collides = false;  // ion source
+    addStaticBox(w, {-0.3f, -8.0f}, 0.2f, 7.4f)->collides = false; // detector below the slit
+    addStaticBox(w, {-0.3f, 5.6f}, 0.2f, 5.0f)->collides = false;  // detector above the slit
+}
+
+void spectrometerUpdate(World& w, float dt) {
+    g_clock += dt;
+    g_emitTimer += dt;
+    struct Ion { float charge, mass; };
+    // radius = m v / (|q| B), so the ion lands at y = -2r; equal q/m lands in the same spot
+    static constexpr Ion species[] = {{1.0f, 0.25f}, {1.0f, 0.5f}, {1.0f, 1.0f}, {1.0f, 1.5f}, {2.0f, 1.0f}, {-1.0f, 0.5f}};
+    if (g_emitTimer > 0.35f) {
+        g_emitTimer = 0.0f;
+        const Ion& ion = species[g_species++ % std::size(species)];
+        Body* b = addCharge(w, {-7.5f, 0.0f}, {4.0f, 0.0f}, ion.charge, 0.1f + 0.08f * std::cbrt(ion.mass), ion.mass, false);
+        g_birth[b->id] = g_clock;
+    }
+
+    std::vector<Body*> expired;
+    for (const auto& b : w.bodies()) {
+        auto it = g_birth.find(b->id);
+        if (it == g_birth.end()) continue;
+        if (b->position.x < -0.1f && b->velocity.x < 0.0f && g_clock - it->second > 2.0f) {
+            b->velocity = {};
+            g_birth.erase(it);
+            g_landed.push_back(b.get());
+        } else if (g_clock - it->second > 14.0f) {
+            expired.push_back(b.get());
+        }
+    }
+    while (g_landed.size() > 120) {
+        expired.push_back(g_landed.front());
+        g_landed.pop_front();
+    }
+    for (Body* b : expired) {
+        g_birth.erase(b->id);
+        w.destroyBody(b);
+    }
+}
+
+void exbDrift(World& w) {
+    w.settings.gravity = {};
+    auto* B = w.addField<UniformMagneticField>();
+    B->B = 1.5f;
+    auto* E = w.addField<UniformElectricField>();
+    E->E = {0.0f, -1.5f};
+    // drift velocity E x B / B^2 is the same for every charge and mass
+    struct P { float y, charge, mass; };
+    for (const P& p : {P{6.0f, 1.0f, 1.0f}, P{3.0f, 1.0f, 3.0f}, P{0.0f, -1.0f, 1.0f}, P{-3.0f, 2.0f, 1.0f},
+                       P{-6.0f, -1.0f, 2.5f}})
+        addCharge(w, {12.0f, p.y}, {}, p.charge, 0.15f, p.mass, false);
+}
+
+void exbDriftUpdate(World& w, float) {
+    for (const auto& b : w.bodies()) {
+        if (b->position.x < -20.0f) b->position.x += 40.0f;
+        if (b->position.x > 20.0f) b->position.x -= 40.0f;
+    }
+}
+
 } // namespace
 
 Shape randomShape(float size) {
@@ -287,8 +561,8 @@ const std::vector<Category>& categories() {
         {"Rigid Bodies", "Stacking, collisions, friction and bounce", nullptr},
         {"Joints & Springs", "Pendulums, bridges, motors and ropes", nullptr},
         {"Soft Bodies & Cloth", "Tearable cloth, pressure blobs and jelly", nullptr},
-        {"Gravity & Orbits", "N-body gravity, orbits and slingshots", "Phase 3"},
-        {"Electromagnetism", "Charges in electric and magnetic fields", "Phase 3"},
+        {"Gravity & Orbits", "N-body gravity, orbits and colliding galaxies", nullptr},
+        {"Electromagnetism", "Charges in electric and magnetic fields", nullptr},
         {"Fluids", "SPH liquids, splashes and buoyancy", "Phase 4"},
     };
     return list;
@@ -296,15 +570,30 @@ const std::vector<Category>& categories() {
 
 const std::vector<Scene>& scenes() {
     static const std::vector<Scene> list = {
-        {"Pyramid", 0, pyramid},
-        {"Shape Rain", 0, shapeRain},
-        {"Friction & Bounce", 0, frictionAndBounce},
-        {"Dominoes", 0, dominoes},
-        {"Pendulums & Springs", 1, pendulums},
-        {"Bridge", 1, bridge},
-        {"Machines", 1, machines},
-        {"Cloth", 2, cloth},
-        {"Soft Bodies", 2, softBodies},
+        {.name = "Pyramid", .category = 0, .setup = pyramid},
+        {.name = "Shape Rain", .category = 0, .setup = shapeRain},
+        {.name = "Friction & Bounce", .category = 0, .setup = frictionAndBounce},
+        {.name = "Dominoes", .category = 0, .setup = dominoes},
+        {.name = "Pendulums & Springs", .category = 1, .setup = pendulums},
+        {.name = "Bridge", .category = 1, .setup = bridge},
+        {.name = "Machines", .category = 1, .setup = machines},
+        {.name = "Cloth", .category = 2, .setup = cloth},
+        {.name = "Soft Bodies", .category = 2, .setup = softBodies},
+        {.name = "Solar System", .category = 3, .setup = solarSystem, .cameraCenter = {}, .cameraScale = 14.0f,
+         .trails = true},
+        {.name = "Three-Body", .category = 3, .setup = threeBody, .cameraCenter = {}, .cameraScale = 60.0f,
+         .trails = true},
+        {.name = "Galaxy Collision", .category = 3, .setup = galaxies, .cameraCenter = {}, .cameraScale = 9.0f},
+        {.name = "Orbit Sandbox", .category = 3, .setup = orbitSandbox, .click = orbitSandboxClick,
+         .cameraCenter = {}, .cameraScale = 18.0f, .trails = true},
+        {.name = "Coulomb Crystal", .category = 4, .setup = coulombCrystal, .cameraCenter = {}, .cameraScale = 27.0f},
+        {.name = "Dipole Field", .category = 4, .setup = dipole, .click = dipoleClick, .cameraCenter = {},
+         .cameraScale = 40.0f,
+         .trails = true, .fieldLines = true},
+        {.name = "Mass Spectrometer", .category = 4, .setup = spectrometer, .update = spectrometerUpdate,
+         .cameraCenter = {5.0f, -3.0f}, .cameraScale = 32.0f, .trails = true},
+        {.name = "ExB Drift", .category = 4, .setup = exbDrift, .update = exbDriftUpdate, .cameraCenter = {},
+         .cameraScale = 34.0f, .trails = true},
     };
     return list;
 }

@@ -12,7 +12,10 @@ struct BodyDef {
     float density = 1.0f;
     float friction = 0.5f;
     float restitution = 0.2f;
+    float charge = 0.0f;
     bool isStatic = false;
+    bool collides = true;
+    bool draggable = false; // lets static bodies be moved by the mouse
 };
 
 class Body {
@@ -24,7 +27,10 @@ public:
     float angle, angularVelocity, torque = 0.0f;
     float mass, invMass, inertia, invInertia;
     float friction, restitution;
+    float charge;
     bool isStatic;
+    bool collides;
+    bool draggable;
     uint32_t id = 0;
 
     Rot rot;

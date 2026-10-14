@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <string>
+#include "field/Fields.h"
 
 using namespace pe;
 
@@ -9,13 +10,17 @@ namespace {
 
 constexpr float kFixedDt = 1.0f / 60.0f;
 constexpr float kTopBar = 52.0f;
+constexpr float kTabBar = 40.0f;
 
 constexpr Color kCategoryColors[] = {
     {231, 111, 81}, {244, 162, 97}, {42, 157, 143}, {94, 129, 172}, {180, 142, 173}, {72, 170, 220},
 };
 
 Color bodyColor(const Body& b) {
+    if (b.charge > 0.0f) return {235, 87, 87};
+    if (b.charge < 0.0f) return {72, 149, 239};
     if (b.isStatic) return {70, 75, 85};
+    if (b.mass > 500.0f) return {255, 200, 87};
     static constexpr Color palette[] = {
         {231, 111, 81}, {244, 162, 97}, {233, 196, 106}, {42, 157, 143}, {94, 129, 172}, {180, 142, 173},
     };
@@ -43,8 +48,11 @@ void drawWorld(Renderer& gfx, const World& world, bool showContacts) {
 
     for (const auto& l : ps.links)
         if (!l.broken) gfx.line(ps.particles[l.a].position, ps.particles[l.b].position, {170, 190, 230, 160});
-    for (const auto& p : ps.particles)
-        gfx.point(p.position, 3.0f, p.invMass == 0.0f ? Color{255, 80, 80} : Color{220, 230, 255});
+    for (const auto& p : ps.particles) {
+        Color c = p.invMass == 0.0f ? Color{255, 80, 80} : Color{220, 230, 255};
+        if (p.color) c = {Uint8(p.color >> 24), Uint8(p.color >> 16), Uint8(p.color >> 8), Uint8(p.color)};
+        gfx.point(p.position, p.color ? 2.0f : 3.0f, c);
+    }
     for (const auto& a : ps.attachments)
         gfx.line(ps.particles[a.particle].position, a.body->position + a.body->rot.apply(a.localAnchor), {255, 200, 80});
 
@@ -78,19 +86,29 @@ void Grab::begin(World& w, Vec2 p) {
         particleInvMass = w.particles.particles[particle].invMass;
         w.particles.particles[particle].invMass = 0.0f;
     } else if (Body* b = w.bodyAt(p)) {
-        joint = w.createJoint<MouseJoint>(b, p);
+        if (b->isStatic) {
+            staticBody = b;
+            staticOffset = b->position - p;
+        } else {
+            joint = w.createJoint<MouseJoint>(b, p);
+        }
     }
 }
 
 void Grab::update(World& w) {
     if (joint) joint->target = target;
     if (particle >= 0) w.particles.particles[particle].position = target;
+    if (staticBody) {
+        staticBody->position = target + staticOffset;
+        staticBody->updateTransform();
+    }
 }
 
 void Grab::end(World& w) {
     if (joint) w.destroyJoint(joint);
     if (particle >= 0) w.particles.particles[particle].invMass = particleInvMass;
     joint = nullptr;
+    staticBody = nullptr;
     particle = -1;
 }
 
@@ -107,19 +125,27 @@ void App::resetBackdrop() {
 }
 
 void App::loadScene(int index) {
+    const Scene& scene = scenes()[index];
     grab_ = {};
     sceneIndex_ = index;
-    category_ = scenes()[index].category;
+    category_ = scene.category;
     world_.clear();
-    scenes()[index].setup(world_);
+    world_.settings = {};
+    world_.particles.damping = 0.5f;
+    scene.setup(world_);
     accumulator_ = 0.0f;
+    cam_.center = scene.cameraCenter;
+    cam_.scale = scene.cameraScale;
+    cam_.insetTop = kTopBar + kTabBar;
+    cam_.insetBottom = 46.0f;
+    showTrails_ = scene.trails;
+    showField_ = scene.fieldLines;
+    trails_.clear();
 }
 
 void App::openCategory(int category) {
     auto list = scenesIn(category);
     if (list.empty()) return;
-    cam_.center = {0.0f, 7.0f};
-    cam_.scale = 40.0f;
     paused_ = false;
     loadScene(list.front());
     screen_ = Screen::Simulation;
@@ -190,6 +216,10 @@ void App::simulate(World& world, float dt, bool interactive) {
         Uint64 t0 = SDL_GetPerformanceCounter();
         if (interactive) grab_.update(world);
         world.step(kFixedDt);
+        if (interactive) {
+            if (auto update = scenes()[sceneIndex_].update) update(world, kFixedDt);
+            recordTrails();
+        }
         if (interactive) stepMs_ = 1000.0f * (SDL_GetPerformanceCounter() - t0) / SDL_GetPerformanceFrequency();
     };
     if (interactive && paused_) {
@@ -213,6 +243,9 @@ void App::frame(float dt) {
     case Screen::Menu2D: drawBackdrop(dt); drawMenu2D(); break;
     case Screen::Simulation:
         simulate(world_, dt, true);
+        drawFieldOverlays();
+        if (showField_) drawFieldLines();
+        if (showTrails_) drawTrails();
         drawWorld(gfx_, world_, showContacts_);
         drawSimulation();
         if (screen_ == Screen::Simulation && !ui_.overUi()) handleWorldClicks();
@@ -225,11 +258,12 @@ void App::handleWorldClicks() {
     Vec2 p = cam_.toWorld(mouse_);
     BodyDef d;
     d.position = p;
+    auto click = scenes()[sceneIndex_].click;
     if (leftPressed_) {
         grab_.begin(world_, p);
-        if (!grab_.active()) world_.createBody(Shape::box(0.5f, 0.5f), d);
+        if (!grab_.active() && !(click && click(world_, p, 1))) world_.createBody(Shape::box(0.5f, 0.5f), d);
     }
-    if (rightPressed_) world_.createBody(Shape::circle(0.5f), d);
+    if (rightPressed_ && !(click && click(world_, p, 3))) world_.createBody(Shape::circle(0.5f), d);
     if (middlePressed_) world_.createBody(randomShape(0.6f), d);
 }
 
@@ -239,6 +273,7 @@ void App::drawBackdrop(float dt) {
     backdrop_.step(std::min(dt, 1.0f / 30.0f));
 
     Camera saveCam = cam_;
+    cam_.insetTop = cam_.insetBottom = 0.0f;
     cam_.center = {0.0f, 9.0f};
     cam_.scale = std::min(cam_.width / 34.0f, cam_.height / 22.0f);
     drawWorld(gfx_, backdrop_, false);
@@ -321,11 +356,14 @@ void App::drawSimulation() {
     const char* catName = categories()[category_].name;
     ui_.label(138, (kTopBar - Renderer::textHeight(1.5f)) * 0.5f, catName, theme::text, 1.5f);
 
-    float x = 138 + Renderer::textWidth(catName, 1.5f) + 24.0f;
+    ui_.panel({0, kTopBar, W, kTabBar}, {24, 27, 35});
+    float x = 12.0f;
+    int n = 1;
     for (int idx : scenesIn(category_)) {
-        const char* name = scenes()[idx].name;
+        char name[64];
+        std::snprintf(name, sizeof name, "%d  %s", n++, scenes()[idx].name);
         float w = Renderer::textWidth(name, 1.25f) + 28.0f;
-        if (ui_.button({x, 10, w, kTopBar - 20}, name, idx == sceneIndex_, 1.25f)) loadScene(idx);
+        if (ui_.button({x, kTopBar + 6, w, kTabBar - 12}, name, idx == sceneIndex_, 1.25f)) loadScene(idx);
         x += w + 8.0f;
     }
 
@@ -338,6 +376,11 @@ void App::drawSimulation() {
         return clicked;
     };
     if (rightButton("Contacts", showContacts_)) showContacts_ = !showContacts_;
+    if (rightButton("Trails", showTrails_)) {
+        showTrails_ = !showTrails_;
+        trails_.clear();
+    }
+    if (category_ == 4 && rightButton("Field", showField_)) showField_ = !showField_;
     if (rightButton("Reset", false)) loadScene(sceneIndex_);
     if (rightButton(paused_ ? "Play" : "Pause", paused_)) paused_ = !paused_;
 
@@ -349,4 +392,105 @@ void App::drawSimulation() {
     ui_.label(12, H - 18,
               "LMB drag / spawn box   RMB ball   MMB shape   wheel zoom   arrows pan   SPACE pause   S step   R reset   ESC menu",
               theme::textFaint, 1.0f);
+}
+
+void App::recordTrails() {
+    if (!showTrails_ || ++trailTick_ % 2) return;
+    constexpr size_t kMaxPoints = 360;
+    for (const auto& b : world_.bodies()) {
+        if (b->isStatic) continue;
+        auto& t = trails_[b->id];
+        if (!t.empty() && (t.back() - b->position).lengthSq() > 9.0f) t.clear(); // teleported
+        t.push_back(b->position);
+        if (t.size() > kMaxPoints) t.pop_front();
+    }
+    if (trails_.size() > world_.bodies().size() * 2) {
+        std::erase_if(trails_, [&](const auto& kv) {
+            return std::none_of(world_.bodies().begin(), world_.bodies().end(),
+                                [&](const auto& b) { return b->id == kv.first; });
+        });
+    }
+}
+
+void App::drawTrails() {
+    for (const auto& b : world_.bodies()) {
+        auto it = trails_.find(b->id);
+        if (it == trails_.end() || it->second.size() < 2) continue;
+        const auto& t = it->second;
+        Color c = bodyColor(*b);
+        for (size_t i = 1; i < t.size(); ++i) {
+            c.a = Uint8(200.0f * i / t.size());
+            gfx_.line(t[i - 1], t[i], c);
+        }
+    }
+}
+
+void App::drawFieldOverlays() {
+    const Vec2 lo = cam_.toWorld({0.0f, float(cam_.height)}), hi = cam_.toWorld({float(cam_.width), 0.0f});
+    for (const auto& f : world_.fields()) {
+        if (auto* m = dynamic_cast<const UniformMagneticField*>(f.get())) {
+            Aabb box = m->region.everywhere() ? Aabb{lo, hi} : m->region.box;
+            Vec2 a = cam_.toScreen({box.min.x, box.max.y}), b = cam_.toScreen({box.max.x, box.min.y});
+            gfx_.fillRect({a.x, a.y, b.x - a.x, b.y - a.y}, {120, 90, 200, 28});
+            // dots = field out of the screen, crosses = into the screen
+            const float step = 1.5f;
+            for (float x = std::ceil(std::max(box.min.x, lo.x) / step) * step; x <= std::min(box.max.x, hi.x); x += step) {
+                for (float y = std::ceil(std::max(box.min.y, lo.y) / step) * step; y <= std::min(box.max.y, hi.y);
+                     y += step) {
+                    Color c{150, 120, 230, 120};
+                    if (m->B > 0.0f) {
+                        gfx_.point({x, y}, 3.0f, c);
+                    } else {
+                        gfx_.line({x - 0.12f, y - 0.12f}, {x + 0.12f, y + 0.12f}, c);
+                        gfx_.line({x - 0.12f, y + 0.12f}, {x + 0.12f, y - 0.12f}, c);
+                    }
+                }
+            }
+        } else if (auto* e = dynamic_cast<const UniformElectricField*>(f.get())) {
+            Vec2 dir = e->E.normalized() * 0.6f;
+            const float step = 3.0f;
+            for (float x = std::ceil(lo.x / step) * step; x <= hi.x; x += step)
+                for (float y = std::ceil(lo.y / step) * step; y <= hi.y; y += step) {
+                    if (!e->region.contains({x, y})) continue;
+                    Color c{240, 200, 90, 90};
+                    const Vec2 o{x, y};
+                    gfx_.line(o - dir, o + dir, c);
+                    gfx_.line(o + dir, o + dir * 0.4f + dir.perp() * 0.5f, c);
+                    gfx_.line(o + dir, o + dir * 0.4f - dir.perp() * 0.5f, c);
+                }
+        }
+    }
+}
+
+void App::drawFieldLines() {
+    std::vector<const Body*> sources;
+    for (const auto& b : world_.bodies())
+        if (b->isStatic && b->charge != 0.0f) sources.push_back(b.get());
+    if (sources.empty()) return;
+
+    const Vec2 lo = cam_.toWorld({0.0f, float(cam_.height)}), hi = cam_.toWorld({float(cam_.width), 0.0f});
+    auto inView = [&](Vec2 p) { return p.x > lo.x - 2 && p.x < hi.x + 2 && p.y > lo.y - 2 && p.y < hi.y + 2; };
+
+    for (const Body* src : sources) {
+        const int lines = std::clamp(static_cast<int>(6.0f * std::abs(src->charge)), 8, 28);
+        const float sign = src->charge > 0.0f ? 1.0f : -1.0f;
+        for (int i = 0; i < lines; ++i) {
+            float a = 2.0f * 3.14159265f * (i + 0.5f) / lines;
+            Vec2 p = src->position + Vec2{std::cos(a), std::sin(a)} * (src->shape.radius + 0.05f);
+            for (int s = 0; s < 400 && inView(p); ++s) {
+                Vec2 e1 = world_.electricFieldAt(p).normalized() * (0.12f * sign);
+                Vec2 mid = p + e1 * 0.5f;
+                Vec2 e2 = world_.electricFieldAt(mid).normalized() * (0.12f * sign);
+                Vec2 next = p + e2;
+                gfx_.line(p, next, {240, 200, 90, 110});
+                p = next;
+                bool absorbed = false;
+                for (const Body* other : sources)
+                    if (other != src && other->charge * src->charge < 0.0f &&
+                        (p - other->position).lengthSq() < other->shape.radius * other->shape.radius)
+                        absorbed = true;
+                if (absorbed) break;
+            }
+        }
+    }
 }

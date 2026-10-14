@@ -1,5 +1,6 @@
 #pragma once
 #include "core/Softness.h"
+#include "field/ForceField.h"
 #include "rigid/Body.h"
 #include "rigid/Collision.h"
 #include "rigid/Joint.h"
@@ -44,6 +45,17 @@ public:
     }
     void destroyJoint(Joint* joint);
 
+    template <typename T>
+    T* addField() {
+        auto field = std::make_unique<T>();
+        T* raw = field.get();
+        fields_.push_back(std::move(field));
+        return raw;
+    }
+    const std::vector<std::unique_ptr<ForceField>>& fields() const { return fields_; }
+    Vec2 electricFieldAt(Vec2 p) const;
+    float magneticFieldAt(Vec2 p) const;
+
     ParticleSystem particles;
 
     void step(float dt);
@@ -57,6 +69,7 @@ private:
     std::vector<std::unique_ptr<Body>> bodies_;
     std::unordered_map<uint64_t, Manifold> manifolds_;
     std::vector<std::unique_ptr<Joint>> joints_;
+    std::vector<std::unique_ptr<ForceField>> fields_;
     std::unordered_set<uint64_t> jointPairs_;
     Softness contactSoft_;
     uint32_t nextId_ = 0;

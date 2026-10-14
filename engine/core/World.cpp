@@ -41,6 +41,7 @@ void World::rebuildJointPairs() {
 }
 
 void World::clear() {
+    fields_.clear();
     joints_.clear();
     jointPairs_.clear();
     particles.clear();
@@ -50,13 +51,26 @@ void World::clear() {
 
 Body* World::bodyAt(Vec2 point) const {
     for (const auto& b : bodies_)
-        if (!b->isStatic && b->contains(point)) return b.get();
+        if ((!b->isStatic || b->draggable) && b->contains(point)) return b.get();
     return nullptr;
+}
+
+Vec2 World::electricFieldAt(Vec2 p) const {
+    Vec2 E;
+    for (const auto& f : fields_) E += f->electricField(*this, p);
+    return E;
+}
+
+float World::magneticFieldAt(Vec2 p) const {
+    float B = 0.0f;
+    for (const auto& f : fields_) B += f->magneticField(p);
+    return B;
 }
 
 void World::step(float dt) {
     const float h = dt / static_cast<float>(settings.substeps);
     for (int s = 0; s < settings.substeps; ++s) {
+        for (auto& f : fields_) f->apply(*this, h);
         integrateVelocities(h);
         detectContacts();
         prepareContacts(h);
@@ -108,7 +122,7 @@ void World::detectContacts() {
         for (size_t j = i + 1; j < sorted.size(); ++j) {
             Body* b = sorted[j];
             if (b->aabb.min.x > a->aabb.max.x) break;
-            if (a->isStatic && b->isStatic) continue;
+            if ((a->isStatic && b->isStatic) || !a->collides || !b->collides) continue;
             if (!a->aabb.overlaps(b->aabb)) continue;
             if (!jointPairs_.empty() && jointPairs_.contains(pairKey(a, b))) continue;
 

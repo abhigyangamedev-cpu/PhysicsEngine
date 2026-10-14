@@ -11,12 +11,14 @@ struct Camera {
     pe::Vec2 center{0.0f, 7.0f};
     float scale = 40.0f; // pixels per meter
     int width = 1280, height = 720;
+    float insetTop = 0.0f, insetBottom = 0.0f; // screen space covered by UI bars
 
+    float midY() const { return insetTop + (height - insetTop - insetBottom) * 0.5f; }
     pe::Vec2 toScreen(pe::Vec2 w) const {
-        return {(w.x - center.x) * scale + width * 0.5f, (center.y - w.y) * scale + height * 0.5f};
+        return {(w.x - center.x) * scale + width * 0.5f, (center.y - w.y) * scale + midY()};
     }
     pe::Vec2 toWorld(pe::Vec2 s) const {
-        return {(s.x - width * 0.5f) / scale + center.x, center.y - (s.y - height * 0.5f) / scale};
+        return {(s.x - width * 0.5f) / scale + center.x, center.y - (s.y - midY()) / scale};
     }
 };
 
