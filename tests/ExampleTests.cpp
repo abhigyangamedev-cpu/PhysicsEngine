@@ -73,3 +73,10 @@ TEST(example_monitor_restarts_cleanly) {
     ExampleRun r2 = run(examples()[1], b);
     CHECK_NEAR(r1.result, r2.result, 1e-4);
 }
+
+TEST(example_piston_gas_stays_at_atmospheric_pressure) {
+    Simulation sim;
+    ExampleRun r = run(examples()[3], sim);
+    CHECK_NEAR(sim.driveForce(sim.indexNamed("Piston")), 40.0, 0.05);
+    CHECK_NEAR(r.result, 25.9, 0.02);
+}

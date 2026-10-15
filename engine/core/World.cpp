@@ -24,6 +24,7 @@ Body* World::createBody(const Shape& shape, const BodyDef& def) {
 void World::destroyBody(Body* body) {
     std::erase_if(joints_, [body](const auto& j) { return j->a == body || j->b == body; });
     rebuildJointPairs();
+    for (auto& f : fields_) f->removeBody(body);
     particles.removeBody(body);
     std::erase_if(manifolds_, [body](const auto& kv) { return kv.second.a == body || kv.second.b == body; });
     std::erase_if(bodies_, [body](const auto& p) { return p.get() == body; });
@@ -89,7 +90,7 @@ void World::step(float dt) {
         applyRestitution();
 
         const float ph = h / static_cast<float>(settings.particleIterations);
-        for (int i = 0; i < settings.particleIterations; ++i) particles.step(ph, settings.gravity, bodies_);
+        for (int i = 0; i < settings.particleIterations; ++i) particles.step(ph, settings.gravity, bodies_, h);
         // the fluid takes fewer, larger steps than the rigid solver
         const int every = std::max(1, settings.substeps / std::max(1, fluid.stepsPerFrame));
         if ((s + 1) % every == 0) fluid.step(h * every, settings.gravity, bodies_);

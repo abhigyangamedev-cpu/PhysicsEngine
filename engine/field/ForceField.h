@@ -4,6 +4,7 @@
 namespace pe {
 
 class World;
+class Body;
 
 // Applied once per substep before velocities are integrated; fields change velocities directly.
 class ForceField {
@@ -14,6 +15,9 @@ public:
     // For visualization: the field's contribution at a point.
     virtual Vec2 electricField(const World&, Vec2) const { return {}; }
     virtual float magneticField(Vec2) const { return 0.0f; }
+
+    // Drops anything that refers to a body about to be destroyed.
+    virtual void removeBody(const Body*) {}
 };
 
 // Field confined to a rectangle; an empty region (min > max) means everywhere.

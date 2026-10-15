@@ -70,7 +70,7 @@ int ParticleSystem::nearest(Vec2 point, float maxDistance) const {
     return best;
 }
 
-void ParticleSystem::step(float h, Vec2 gravity, const std::vector<std::unique_ptr<Body>>& bodies) {
+void ParticleSystem::step(float h, Vec2 gravity, const std::vector<std::unique_ptr<Body>>& bodies, float bodyStep) {
     if (particles.empty()) return;
 
     const float damp = 1.0f / (1.0f + h * damping);
@@ -84,7 +84,7 @@ void ParticleSystem::step(float h, Vec2 gravity, const std::vector<std::unique_p
     const float alphaScale = 1.0f / (h * h);
     solveLinks(alphaScale);
     solvePressures(alphaScale);
-    solveAttachments(h, alphaScale);
+    solveAttachments(bodyStep > 0.0f ? bodyStep : h, alphaScale);
     if (selfCollision) collideParticles();
     collideBodies(h, bodies);
 
@@ -137,7 +137,7 @@ void ParticleSystem::solvePressures(float alphaScale) {
     }
 }
 
-void ParticleSystem::solveAttachments(float h, float alphaScale) {
+void ParticleSystem::solveAttachments(float bodyStep, float alphaScale) {
     for (auto& at : attachments) {
         Particle& p = particles[at.particle];
         Body& b = *at.body;
@@ -152,7 +152,14 @@ void ParticleSystem::solveAttachments(float h, float alphaScale) {
         if (w == 0.0f) continue;
         float lambda = len / (w + at.compliance * alphaScale);
         p.position += n * (lambda * p.invMass);
-        if (!b.isStatic) b.applyImpulse(-n * (lambda / h), r);
+        if (b.isStatic) continue;
+        // move the body now so later iterations see the correction instead of stacking impulses on it,
+        // and give it the matching velocity over the step it integrates with
+        Vec2 j = -n * lambda;
+        b.position += j * b.invMass;
+        b.angle += cross(r, j) * b.invInertia;
+        b.updateTransform();
+        b.applyImpulse(j / bodyStep, r);
     }
 }
 
@@ -213,14 +220,20 @@ void ParticleSystem::collideParticles() {
 }
 
 void ParticleSystem::collideBodies(float h, const std::vector<std::unique_ptr<Body>>& bodies) {
-    for (auto& p : particles) {
+    auto attachedTo = [this](size_t particle, const Body* body) {
+        for (const auto& at : attachments)
+            if (at.particle == particle && at.body == body) return true;
+        return false;
+    };
+    for (size_t i = 0; i < particles.size(); ++i) {
+        Particle& p = particles[i];
         if (p.invMass == 0.0f) continue;
         Aabb box{p.position - Vec2{p.radius, p.radius}, p.position + Vec2{p.radius, p.radius}};
         for (const auto& bp : bodies) {
             Body& b = *bp;
             if (!b.collides || !b.aabb.overlaps(box)) continue;
             ParticleContact c;
-            if (!particleContact(b, p.position, p.radius, c)) continue;
+            if (!particleContact(b, p.position, p.radius, c) || attachedTo(i, &b)) continue;
 
             Vec2 r = c.point - b.position;
             float rn = cross(r, c.normal);

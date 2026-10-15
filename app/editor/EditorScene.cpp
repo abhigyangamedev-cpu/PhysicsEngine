@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <iomanip>
 #include <numbers>
 #include <sstream>
 #include <unordered_map>
@@ -34,6 +35,33 @@ Shape ObjectSpec::shape() const {
     }
     default: return Shape::box(std::max(width, 0.02f) * 0.5f, std::max(height, 0.02f) * 0.5f);
     }
+}
+
+void ObjectSpec::sanitize() {
+    if (int(kind) < 0 || int(kind) > int(ObjKind::Wedge)) kind = ObjKind::Block;
+    mass = std::max(mass, 1e-3f);
+    friction = std::max(friction, 0.0f);
+    restitution = std::clamp(restitution, 0.0f, 1.0f);
+}
+
+void LinkSpec::sanitize() {
+    if (int(kind) < 0 || int(kind) > int(LinkKind::Pulley)) kind = LinkKind::Rod;
+    k = std::max(k, 0.0f);
+    damping = std::max(damping, 0.0f);
+    ratio = std::max(ratio, 0.1f);
+    wheelRadius = std::max(wheelRadius, 0.02f);
+}
+
+void WorldSpec::sanitize() {
+    timeScale = std::clamp(timeScale, 0.01f, 10.0f);
+    stopAt = std::max(stopAt, 0.0f);
+    drag = std::max(drag, 0.0f);
+}
+
+void Scene::sanitize() {
+    world.sanitize();
+    for (auto& o : objects) o.sanitize();
+    for (auto& l : links) l.sanitize();
 }
 
 ObjectSpec* Scene::object(int id) {
@@ -248,7 +276,7 @@ bool Scene::save(const char* path) const {
     f << "world " << w.g << ' ' << w.timeScale << ' ' << w.stopAt << ' ' << w.drag << ' ' << w.E.x << ' ' << w.E.y << ' '
       << w.B << ' ' << w.coulomb << ' ' << w.coulombK << ' ' << w.mutualGravity << ' ' << w.G << '\n';
     for (const auto& o : objects)
-        f << "obj " << o.id << ' ' << o.name << ' ' << int(o.kind) << ' ' << o.pos.x << ' ' << o.pos.y << ' ' << o.angleDeg
+        f << "obj " << o.id << ' ' << std::quoted(o.name) << ' ' << int(o.kind) << ' ' << o.pos.x << ' ' << o.pos.y << ' ' << o.angleDeg
           << ' ' << o.width << ' ' << o.height << ' ' << o.radius << ' ' << o.base << ' ' << o.slopeDeg << ' ' << o.flip << ' '
           << o.mass << ' ' << o.velocity.x << ' ' << o.velocity.y << ' ' << o.omega << ' ' << o.force.x << ' ' << o.force.y
           << ' ' << o.friction << ' ' << o.restitution << ' ' << o.charge << ' ' << o.fixed << ' ' << o.noSpin << ' ' << o.holdVelocity << '\n';
@@ -275,7 +303,7 @@ bool Scene::load(const char* path) {
                 w.mutualGravity >> w.G;
         } else if (tag == "obj") {
             ObjectSpec o;
-            in >> o.id >> o.name >> kind >> o.pos.x >> o.pos.y >> o.angleDeg >> o.width >> o.height >> o.radius >> o.base >>
+            in >> o.id >> std::quoted(o.name) >> kind >> o.pos.x >> o.pos.y >> o.angleDeg >> o.width >> o.height >> o.radius >> o.base >>
                 o.slopeDeg >> o.flip >> o.mass >> o.velocity.x >> o.velocity.y >> o.omega >> o.force.x >> o.force.y >>
                 o.friction >> o.restitution >> o.charge >> o.fixed >> o.noSpin;
             o.kind = static_cast<ObjKind>(kind);
@@ -290,6 +318,7 @@ bool Scene::load(const char* path) {
             if (in) s.links.push_back(l);
         }
     }
+    s.sanitize();
     for (const auto& o : s.objects) s.nextId = std::max(s.nextId, o.id + 1);
     for (const auto& l : s.links) s.nextId = std::max(s.nextId, l.id + 1);
     *this = std::move(s);

@@ -116,10 +116,22 @@ void SpringField::apply(World&, float h) {
         if (s.pushOnly && stretch >= 0.0f) continue;
 
         Vec2 vB = s.b ? s.b->velocityAt(pB) : s.drive * (omega * s.driveHz * std::cos(omega * s.driveHz * time));
-        float f = s.k * stretch + s.damping * dot(vB - s.a->velocityAt(pA), u);
+        // inverse mass the spring sees along its axis; dividing by 1 + h w (c + h k) keeps a spring too
+        // stiff (or too damped) for the step from blowing up, and changes ordinary springs by ~1e-5
+        Vec2 rA = pA - s.a->position;
+        float w = s.a->invMass + s.a->invInertia * cross(rA, u) * cross(rA, u);
+        if (s.b) {
+            Vec2 rB = pB - s.b->position;
+            w += s.b->invMass + s.b->invInertia * cross(rB, u) * cross(rB, u);
+        }
+        float f = (s.k * stretch + s.damping * dot(vB - s.a->velocityAt(pA), u)) / (1.0f + h * w * (s.damping + h * s.k));
         s.a->applyImpulse(u * (f * h), pA - s.a->position);
         if (s.b) s.b->applyImpulse(u * (-f * h), pB - s.b->position);
     }
+}
+
+void SpringField::removeBody(const Body* body) {
+    std::erase_if(springs, [body](const Spring& s) { return s.a == body || s.b == body; });
 }
 
 float orbitalSpeed(float G, float centralMass, float radius) { return std::sqrt(G * centralMass / radius); }

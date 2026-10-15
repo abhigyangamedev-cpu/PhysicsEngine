@@ -47,7 +47,8 @@ public:
     void attach(uint32_t particle, Body* body, float compliance = 0.0f);
     int newGroup() { return ++groupCounter_; }
 
-    void step(float h, Vec2 gravity, const std::vector<std::unique_ptr<Body>>& bodies);
+    // bodyStep: the rigid step the bodies integrate over (several particle steps may share one)
+    void step(float h, Vec2 gravity, const std::vector<std::unique_ptr<Body>>& bodies, float bodyStep = 0.0f);
     void removeBody(const Body* body);
     void clear();
 
@@ -67,7 +68,7 @@ private:
 
     void solveLinks(float alphaScale);
     void solvePressures(float alphaScale);
-    void solveAttachments(float h, float alphaScale);
+    void solveAttachments(float bodyStep, float alphaScale);
     void collideParticles();
     void collideBodies(float h, const std::vector<std::unique_ptr<Body>>& bodies);
 };

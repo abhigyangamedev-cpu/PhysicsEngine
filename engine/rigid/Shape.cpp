@@ -38,6 +38,13 @@ Shape Shape::box(float hw, float hh) {
 }
 
 Shape Shape::polygon(std::vector<Vec2> points) {
+    constexpr float kMinHalf = 0.005f;
+    Aabb box{{1e30f, 1e30f}, {-1e30f, -1e30f}};
+    for (Vec2 p : points) {
+        box.min = {std::min(box.min.x, p.x), std::min(box.min.y, p.y)};
+        box.max = {std::max(box.max.x, p.x), std::max(box.max.y, p.y)};
+    }
+
     Shape s;
     s.type = ShapeType::Polygon;
     s.vertices = convexHull(std::move(points));
@@ -51,6 +58,12 @@ Shape Shape::polygon(std::vector<Vec2> points) {
         float tri = 0.5f * cross(a, b);
         area += tri;
         c += (a + b) * (tri / 3.0f);
+    }
+    // too few or collinear points: fall back to a thin box over their extent
+    if (n < 3 || !(area > 1e-8f)) {
+        Vec2 half = box.min.x > box.max.x ? Vec2{} : (box.max - box.min) * 0.5f;
+        half = {std::max(half.x, kMinHalf), std::max(half.y, kMinHalf)};
+        return polygon({{-half.x, -half.y}, {half.x, -half.y}, {half.x, half.y}, {-half.x, half.y}});
     }
     c = c / area;
     for (auto& v : s.vertices) v -= c;

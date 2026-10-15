@@ -18,6 +18,13 @@ constexpr float kForceScale = 0.1f; // per N
 constexpr size_t kMaxSamples = 12000;
 constexpr Color kVelColor{110, 220, 120}, kAccColor{245, 160, 70}, kForceColor{235, 90, 90};
 
+// Grid lines are counted in whole steps: adding step to a large float coordinate can stop changing it,
+// and a view panned far away must not turn into millions of lines.
+int gridStart(float lo, float step) { return static_cast<int>(std::clamp(std::floor(lo / step), -1e8f, 1e8f)); }
+int gridEnd(float hi, float step, int start) {
+    return static_cast<int>(std::clamp(std::floor(hi / step), float(start) - 1.0f, float(start) + 1000.0f));
+}
+
 float snap(float v, float step) { return std::round(v / step) * step; }
 bool ctrlHeld() { return SDL_GetModState() & SDL_KMOD_CTRL; }
 bool shiftHeld() { return SDL_GetModState() & SDL_KMOD_SHIFT; }
@@ -137,7 +144,13 @@ void Editor::simulate(float dt) {
 }
 
 void Editor::stepWorld() {
-    sim_.step();
+    if (!sim_.blewUp()) sim_.step();
+    if (sim_.blewUp()) {
+        paused_ = true;
+        accumulator_ = 0.0f;
+        setStatus("Simulation blew up: an object got too fast or too far. Check stiff springs, big forces or charges.");
+        return;
+    }
     const float t = sim_.time();
     for (size_t i = 0; i < sim_.size(); ++i) {
         const Body* b = sim_.body(static_cast<int>(i));
@@ -516,12 +529,14 @@ void Editor::drawGrid() {
     if (!showGrid_) return;
     const Vec2 lo = cam_.toWorld({0.0f, float(cam_.height)}), hi = cam_.toWorld({float(cam_.width), 0.0f});
     const float step = cam_.scale >= 25.0f ? 1.0f : cam_.scale >= 6.0f ? 5.0f : 25.0f;
-    for (float x = std::floor(lo.x / step) * step; x <= hi.x; x += step) {
+    for (int ix = gridStart(lo.x, step), nx = gridEnd(hi.x, step, ix); ix <= nx; ++ix) {
+        const float x = ix * step;
         const bool major = std::fmod(std::abs(x) + 0.01f, step * 5.0f) < 0.02f;
         Color c = std::abs(x) < 1e-3f ? Color{80, 88, 108} : major ? Color{44, 49, 62} : Color{30, 34, 43};
         gfx_.line({x, lo.y}, {x, hi.y}, c);
     }
-    for (float y = std::floor(lo.y / step) * step; y <= hi.y; y += step) {
+    for (int iy = gridStart(lo.y, step), ny = gridEnd(hi.y, step, iy); iy <= ny; ++iy) {
+        const float y = iy * step;
         const bool major = std::fmod(std::abs(y) + 0.01f, step * 5.0f) < 0.02f;
         Color c = std::abs(y) < 1e-3f ? Color{80, 88, 108} : major ? Color{44, 49, 62} : Color{30, 34, 43};
         gfx_.line({lo.x, y}, {hi.x, y}, c);
@@ -532,12 +547,14 @@ void Editor::drawGrid() {
     Vec2 origin = cam_.toScreen({0.0f, 0.0f});
     float ly = std::clamp(origin.y + 4.0f, kTop + kBar + 4.0f, float(cam_.height) - cam_.insetBottom - 14.0f);
     float lx = std::clamp(origin.x + 4.0f, 4.0f, float(cam_.width) - kInspW - 40.0f);
-    for (float x = std::floor(lo.x / labelStep) * labelStep; x <= hi.x; x += labelStep) {
+    for (int ix = gridStart(lo.x, labelStep), nx = gridEnd(hi.x, labelStep, ix); ix <= nx; ++ix) {
+        const float x = ix * labelStep;
         if (std::abs(x) < 1e-3f) continue;
         std::snprintf(buf, sizeof buf, "%g", x);
         gfx_.text(cam_.toScreen({x, 0.0f}).x + 3.0f, ly, buf, theme::textFaint, 1.0f);
     }
-    for (float y = std::floor(lo.y / labelStep) * labelStep; y <= hi.y; y += labelStep) {
+    for (int iy = gridStart(lo.y, labelStep), ny = gridEnd(hi.y, labelStep, iy); iy <= ny; ++iy) {
+        const float y = iy * labelStep;
         if (std::abs(y) < 1e-3f) continue;
         std::snprintf(buf, sizeof buf, "%g", y);
         gfx_.text(lx, cam_.toScreen({0.0f, y}).y + 3.0f, buf, theme::textFaint, 1.0f);
@@ -550,8 +567,9 @@ void Editor::drawFieldOverlay() {
     if (ws.B != 0.0f) {
         const float step = std::max(1.0f, std::round(80.0f / cam_.scale));
         const float s = 4.0f / cam_.scale;
-        for (float x = std::ceil(lo.x / step) * step; x <= hi.x; x += step)
-            for (float y = std::ceil(lo.y / step) * step; y <= hi.y; y += step) {
+        for (int ix = gridStart(lo.x, step), nx = gridEnd(hi.x, step, ix); ix <= nx; ++ix)
+            for (int iy = gridStart(lo.y, step), ny = gridEnd(hi.y, step, iy); iy <= ny; ++iy) {
+                const float x = ix * step, y = iy * step;
                 Color c{150, 120, 230, 110};
                 if (ws.B > 0.0f) {
                     gfx_.point({x, y}, 3.0f, c);
@@ -564,8 +582,9 @@ void Editor::drawFieldOverlay() {
     if (ws.E.lengthSq() > 0.0f) {
         const float step = std::max(1.0f, std::round(120.0f / cam_.scale));
         Vec2 dir = ws.E.normalized() * (18.0f / cam_.scale);
-        for (float x = std::ceil(lo.x / step) * step; x <= hi.x; x += step)
-            for (float y = std::ceil(lo.y / step) * step; y <= hi.y; y += step) {
+        for (int ix = gridStart(lo.x, step), nx = gridEnd(hi.x, step, ix); ix <= nx; ++ix)
+            for (int iy = gridStart(lo.y, step), ny = gridEnd(hi.y, step, iy); iy <= ny; ++iy) {
+                const float x = ix * step, y = iy * step;
                 const Vec2 o{x, y};
                 Color c{240, 200, 90, 80};
                 gfx_.line(o - dir, o + dir, c);

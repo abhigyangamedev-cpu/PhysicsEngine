@@ -1,4 +1,5 @@
 #include "editor/Simulation.h"
+#include <cmath>
 
 namespace editor {
 
@@ -10,8 +11,10 @@ float kineticEnergy(const Body& b) {
 
 void Simulation::load(const Scene& scene) {
     scene_ = scene;
+    scene_.sanitize();
     build(scene_, world_, built_);
     time_ = 0.0f;
+    blewUp_ = false;
     accel_.assign(size(), {});
     drive_.assign(size(), 0.0f);
     driveSum_.assign(size(), 0.0f);
@@ -35,6 +38,10 @@ void Simulation::step() {
         const Body* b = built_.bodies[i];
         if (b->isStatic) continue;
         accel_[i] = accel_[i] * 0.5f + (b->velocity - before[i]) * (0.5f / kDt);
+        constexpr float kLimit = 1e7f;
+        if (!(std::abs(b->position.x) < kLimit && std::abs(b->position.y) < kLimit && b->velocity.lengthSq() < kLimit * kLimit &&
+              std::abs(b->angularVelocity) < kLimit))
+            blewUp_ = true;
 
         // constant-velocity drive: PI control on the speed along the initial velocity
         if (!o.holdVelocity || o.velocity.lengthSq() == 0.0f) continue;

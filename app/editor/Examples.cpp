@@ -153,6 +153,69 @@ bool blocksMonitor(const Simulation& sim, ExampleRun& run) {
     return false;
 }
 
+// ---- Gas heated under a piston ----
+
+constexpr float kArea = 4e-4f, kAtm = 100e3f, kStroke = 0.025f, kRise = 1.2f, kR = 8.3f;
+constexpr float kCv = 2.5f * kR; // diatomic, rotation but no vibration: 5/2 R
+constexpr float kPistonSpeed = 0.005f; // slow enough to count as quasi-static; any value gives the same work
+
+Scene pistonSetup() {
+    Scene s = defaultScene();
+    s.world.g = 0.0f; // the piston's weight is neglected
+    auto wall = [&](const char* name, Vec2 pos, float w, float h) {
+        auto& o = add(s, name, ObjKind::Block, pos);
+        o.width = w;
+        o.height = h;
+        o.fixed = true;
+    };
+    wall("Base", {0.0f, 0.0025f}, 0.03f, 0.005f);
+    wall("Left wall", {-0.0125f, 0.065f}, 0.005f, 0.12f);
+    wall("Right wall", {0.0125f, 0.065f}, 0.005f, 0.12f);
+    // a hair narrower than the 2 cm bore so it slides without friction
+    auto& piston = add(s, "Piston", ObjKind::Block, {0.0f, 0.05f});
+    piston.width = 0.0195f;
+    piston.height = 0.005f;
+    piston.mass = 1.0f;
+    piston.velocity = {0.0f, kPistonSpeed};
+    piston.force = {0.0f, -kAtm * kArea}; // the atmosphere pushing down
+    piston.holdVelocity = true;           // the drive is the gas pushing up
+    piston.noSpin = true;
+    return s;
+}
+
+bool pistonMonitor(const Simulation& sim, ExampleRun& run) {
+    const int ip = sim.indexNamed("Piston");
+    const Body* p = sim.body(ip);
+    if (!p || run.done) return false;
+    const float gasForce = sim.driveForce(ip), t = sim.time();
+    float y = p->position.y;
+
+    // heating starts once the drive has taken hold
+    if (t < 0.5f) {
+        run.prev[0] = y;
+        run.lines = {format("t = %.2f s  (letting the gas pressure settle)", t)};
+        return false;
+    }
+    if (!run.primed) run.prev[1] = y, run.prev[2] = 0.0f, run.primed = true;
+    float stroke = y - run.prev[0];
+    if (stroke > kStroke) { // stop the work exactly at the end of the stroke
+        y -= stroke - kStroke;
+        stroke = kStroke;
+    }
+    run.prev[2] += gasForce * (y - run.prev[1]);
+    run.prev[1] = y;
+
+    const float work = run.prev[2], dU = kCv * kRise * stroke / kStroke;
+    run.result = dU + work;
+    run.lines = {format("piston moved %.2f mm,  gas pressure %.1f kPa", stroke * 1e3, gasForce / kArea * 1e-3),
+                 format("work done by gas  W = %.3f J", work),
+                 format("dU = n Cv dT = %.2f J  (dT = %.3f C)", dU, kRise * stroke / kStroke),
+                 format("heat supplied  Q = dU + W = %.2f J", run.result)};
+    if (stroke < kStroke) return false;
+    run.done = true;
+    return true;
+}
+
 } // namespace
 
 const std::vector<Example>& examples() {
@@ -179,6 +242,16 @@ const std::vector<Example>& examples() {
          "210 N, the official answer. A-B friction is now kinetic: 0.5 x 4 x 10 = 20 N. B: T = 20 + 50 = 70 N. "
          "C: F = f(BC) + T + f(ground) = 50 + 70 + 90 = 210 N.",
          210.0f, blocksHeld, {4.0f, 3.0f}, 30.0f, "C", 4, blocksMonitor},
+        {"Gas heated under a piston",
+         "One mole of diatomic gas having rotational modes only is kept in a cylinder with a piston system. The "
+         "cross-section area of the cylinder is 4 cm^2. The gas is heated slowly to raise the temperature by 1.2 C "
+         "during which the piston moves by 25 mm. The amount of heat supplied to the gas is ____ J. (Atmospheric "
+         "pressure = 100 kPa, R = 8.3 J/mol K) (Neglect mass of the piston)",
+         "25.9 J. A massless piston keeps the gas at atmospheric pressure, so W = P A dx = 100e3 x 4e-4 x 0.025 = "
+         "1 J. Rotation without vibration gives Cv = 5/2 R, so dU = 1 x 2.5 x 8.3 x 1.2 = 24.9 J. Q = dU + W = 25.9 J "
+         "(about 26 J). The data isn't self-consistent for an ideal gas (P dV = n R dT would be 10 J), but the "
+         "question intends W from the given stroke.",
+         25.9f, pistonSetup, {0.0f, 0.06f}, 2000.0f, "Piston", 1, pistonMonitor},
     };
     return list;
 }
