@@ -1,6 +1,7 @@
 #pragma once
 #include "core/World3.h"
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace view3d {
@@ -23,6 +24,15 @@ struct Camera {
     Mat4 view() const;
     Mat4 projection(float aspect) const;
     pe3::Vec3 ray(float ndcX, float ndcY, float aspect) const;
+    // window position of a world point; false when it is behind the camera
+    bool project(pe3::Vec3 p, float width, float height, float& x, float& y) const;
+};
+
+// A bar drawn in the world on top of the bodies: velocity arrows, trails, links being placed.
+struct Line3 {
+    pe3::Vec3 a, b;
+    float radius = 0.015f;
+    uint32_t color = 0xffffffff;
 };
 
 unsigned linkProgram(const char* vertexSource, const char* fragmentSource); // 0 on failure, errors logged
@@ -31,7 +41,7 @@ class Renderer3 {
 public:
     bool init();
     void draw(const pe3::World& world, const Camera& cam, int width, int height, const pe3::Body* highlight,
-              bool tintSleeping = false);
+              bool tintSleeping = false, std::span<const Line3> extras = {});
 
 private:
     struct Mesh {
@@ -41,6 +51,7 @@ private:
     Mesh cube_, sphere_;
     unsigned instanceVbo_ = 0;
     unsigned program_ = 0, shadowProgram_ = 0;
+    int uViewProj_ = -1, uLightViewProj_ = -1, uLightDir_ = -1, uEye_ = -1, uSky_ = -1, uShadow_ = -1, uShadowLightVP_ = -1;
     unsigned shadowFbo_ = 0, shadowTex_ = 0;
     static constexpr int kShadowSize = 2048;
     std::vector<float> boxes_, spheres_;

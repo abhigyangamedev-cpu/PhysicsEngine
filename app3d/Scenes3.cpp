@@ -232,6 +232,11 @@ void ropeBridge(World& w) {
     links.front() = curve(-half);
     links.back() = curve(half);
 
+    // a little friction in each hinge, like rope rubbing on wood, so the sway dies out
+    auto hinge = [&](Body* a, Body* b, Vec3 at) {
+        auto* h = w.createJoint<HingeJoint>(a, b, at, Vec3{0, 0, 1});
+        h->enableMotor = true, h->motorSpeed = 0.0f, h->maxMotorTorque = 0.3f;
+    };
     Body* prev = nullptr;
     for (int k = 0; k < planks; ++k) {
         const Vec3 a = links[k], b = links[k + 1], d = b - a;
@@ -242,10 +247,10 @@ void ropeBridge(World& w) {
         def.group = 7;
         def.color = k % 2 ? 0xa47148ff : 0x8d5b36ff;
         Body* plank = w.createBody(Shape::box({d.length() * 0.5f - 0.02f, 0.05f, 0.7f}), def);
-        w.createJoint<HingeJoint>(prev, plank, a, Vec3{0, 0, 1});
+        hinge(prev, plank, a);
         prev = plank;
     }
-    w.createJoint<HingeJoint>(prev, nullptr, links.back(), Vec3{0, 0, 1});
+    hinge(prev, nullptr, links.back());
 
     for (int i = 0; i < 6; ++i) box(w, {-3.0f + i * 1.2f, 6.0f + i * 0.8f, 0}, {0.3f, 0.3f, 0.3f}, 0x3d85c6ff);
     ball(w, {0, 9, 0}, 0.4f, 0xe07a5fff);
@@ -279,7 +284,9 @@ void paddleWheel(World& w) {
     for (int i = 0; i < 110; ++i) ball(w, {ux(rng), 3.5f + i * 0.06f, uz(rng)}, 0.22f, colors[i % 4]);
 }
 
-// joints get a little friction, like real limbs, so a light forearm doesn't swing forever
+// joints get a little friction, like real limbs, so a light forearm doesn't swing forever.
+// Parts of one figure share a group and never collide, so the neck and hips carry swing cones:
+// without them the head could fold straight into the chest and the thighs up through the torso.
 void ragdoll(World& w, Vec3 p, int group, uint32_t color) {
     auto part = [&](Vec3 offset, Shape s) {
         BodyDef d;
@@ -289,7 +296,9 @@ void ragdoll(World& w, Vec3 p, int group, uint32_t color) {
         return w.createBody(s, d);
     };
     auto ballJoint = [&](Body* a, Body* b, Vec3 at, float friction) {
-        w.createJoint<BallJoint>(a, b, p + at)->maxFrictionTorque = friction;
+        auto* j = w.createJoint<BallJoint>(a, b, p + at);
+        j->maxFrictionTorque = friction;
+        return j;
     };
     auto hinge = [&](Body* a, Body* b, Vec3 at, float lower, float upper, float friction) {
         auto* h = w.createJoint<HingeJoint>(a, b, p + at, Vec3{1, 0, 0});
@@ -302,7 +311,7 @@ void ragdoll(World& w, Vec3 p, int group, uint32_t color) {
     head->color = 0xf2cc8fff;
     head->rollingResistance = 0.1f;
     hinge(pelvis, torso, {0, 0.11f, 0}, -0.3f, 0.8f, 0.05f);
-    ballJoint(torso, head, {0, 0.58f, 0}, 0.02f);
+    ballJoint(torso, head, {0, 0.58f, 0}, 0.02f)->limitSwing({0, 1, 0}, 0.6f); // ~35 deg keeps the head clear of the torso
     for (float s : {-1.0f, 1.0f}) {
         Body* upper = part({s * 0.28f, 0.39f, 0}, Shape::box({0.06f, 0.15f, 0.06f}));
         Body* fore = part({s * 0.28f, 0.09f, 0}, Shape::box({0.05f, 0.14f, 0.05f}));
@@ -311,7 +320,7 @@ void ragdoll(World& w, Vec3 p, int group, uint32_t color) {
 
         Body* thigh = part({s * 0.1f, -0.31f, 0}, Shape::box({0.08f, 0.2f, 0.08f}));
         Body* shin = part({s * 0.1f, -0.73f, 0}, Shape::box({0.07f, 0.2f, 0.07f}));
-        ballJoint(pelvis, thigh, {s * 0.1f, -0.1f, 0}, 0.04f);
+        ballJoint(pelvis, thigh, {s * 0.1f, -0.1f, 0}, 0.04f)->limitSwing({0, -1, 0}, 1.6f);
         hinge(thigh, shin, {s * 0.1f, -0.52f, 0}, 0.0f, 2.4f, 0.02f);
     }
 }

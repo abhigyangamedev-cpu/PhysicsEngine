@@ -1,6 +1,7 @@
 #include "editor/Examples.h"
 #include <cmath>
 #include <cstdio>
+#include <numbers>
 
 namespace editor {
 
@@ -216,18 +217,112 @@ bool pistonMonitor(const Simulation& sim, ExampleRun& run) {
     return true;
 }
 
+// ---- Skidding car ----
+
+constexpr float kCarSpeed = 20.0f, kCarMu = 0.7f;
+
+Scene carSetup() {
+    Scene s = defaultScene();
+    s.objects.clear();
+    s.world.g = 10.0f;
+    auto& road = add(s, "Road", ObjKind::Block, {30.0f, -0.5f});
+    road.width = 120.0f;
+    road.fixed = true;
+    road.friction = 1.0f; // contact friction takes the smaller u: the tyres decide
+    auto& car = add(s, "Car", ObjKind::Block, {0.0f, 0.75f});
+    car.width = 4.0f;
+    car.height = 1.5f;
+    car.mass = 1200.0f;
+    car.friction = kCarMu;
+    car.velocity = {kCarSpeed, 0.0f};
+    car.noSpin = true; // locked wheels: it slides, it doesn't tip
+    return s;
+}
+
+bool carMonitor(const Simulation& sim, ExampleRun& run) {
+    const int index = sim.indexNamed("Car");
+    const Body* car = sim.body(index);
+    if (!car || run.done) return false;
+    // measured from where it was placed: the monitor first runs after a step has already moved it
+    const float d = car->position.x - sim.scene().objects[index].pos.x, v = car->velocity.x;
+    if (sim.time() > 0.1f && std::abs(v) < 1e-3f) {
+        run.result = d;
+        run.lines = {format("The car stops after skidding %.2f m", d), format("in t = %.2f s", sim.time())};
+        run.done = true;
+        return true;
+    }
+    run.lines = {format("t = %.3f s   skidded %.2f m", sim.time(), d), format("speed %.2f m/s  (%.1f km/h)", v, v * 3.6)};
+    return false;
+}
+
+// ---- Football kick ----
+
+constexpr float kKickSpeed = 20.0f, kKickAngle = 30.0f, kFootballR = 0.11f;
+
+Scene footballSetup() {
+    Scene s = defaultScene();
+    s.objects.clear();
+    s.world.g = 10.0f;
+    auto& pitch = add(s, "Pitch", ObjKind::Block, {20.0f, -0.5f});
+    pitch.width = 80.0f;
+    pitch.fixed = true;
+    pitch.friction = 1.0f;
+    auto& ball = add(s, "Ball", ObjKind::Ball, {0.0f, kFootballR});
+    ball.radius = kFootballR;
+    ball.mass = 0.43f;
+    const float a = kKickAngle * std::numbers::pi_v<float> / 180.0f;
+    ball.velocity = Vec2{std::cos(a), std::sin(a)} * kKickSpeed;
+    ball.noSpin = true;
+    return s;
+}
+
+bool footballMonitor(const Simulation& sim, ExampleRun& run) {
+    const Body* ball = sim.body("Ball");
+    if (!ball || run.done) return false;
+    const float h = ball->position.y - kFootballR, x = ball->position.x;
+    if (run.primed && h <= 0.0f && run.prev[1] > 0.0f) {
+        // landing between the last two steps: interpolate where the height reached zero
+        const float f = run.prev[1] / (run.prev[1] - h);
+        run.result = run.prev[0] + (x - run.prev[0]) * f;
+        run.lines = {format("The ball lands %.2f m away", run.result),
+                     format("after t = %.3f s in the air", sim.time() - Simulation::kDt * (1.0f - f)),
+                     format("highest point %.2f m", run.prev[2])};
+        run.done = true;
+        return true;
+    }
+    run.prev[0] = x;
+    run.prev[1] = h;
+    run.prev[2] = std::max(run.prev[2], h);
+    run.primed = true;
+    run.lines = {format("t = %.3f s", sim.time()), format("x %.2f m   height %.2f m", x, h),
+                 format("vx %.2f   vy %.2f m/s", ball->velocity.x, ball->velocity.y)};
+    return false;
+}
+
 } // namespace
 
 const std::vector<Example>& examples() {
     static const std::vector<Example> list = {
-        {"Balloon and stone",
+        {"Skidding car", "Friction",
+         "A car moving at 72 km/h (20 m/s) brakes hard and its wheels lock. The coefficient of kinetic friction between "
+         "the tyres and the dry road is 0.7. How far does the car skid before it stops? (Take g = 10 m/s^2)",
+         "28.6 m. Friction is the only horizontal force: m a = 0.7 m g, so the car slows at a = 7 m/s^2 whatever its "
+         "mass. From v^2 = u^2 - 2 a d: d = 20^2 / (2 x 7) = 28.6 m. Double the speed and the skid is four times longer.",
+         28.571f, carSetup, {20.0f, 2.0f}, 20.0f, "Car", 2, carMonitor},
+        {"Football kick", "Projectiles",
+         "A footballer kicks a ball off the ground at 20 m/s, 30 degrees above the horizontal. Ignoring air resistance, "
+         "how far away does the ball first land? (Take g = 10 m/s^2)",
+         "34.6 m. Time of flight t = 2 u sin(30) / g = 2 x 20 x 0.5 / 10 = 2 s. Range = u cos(30) t = 17.32 x 2 = "
+         "34.6 m, the same as u^2 sin(60) / g. A 60 degree kick lands at the same spot.",
+         34.641f, footballSetup, {22.0f, 5.0f}, 18.0f, "Ball", 1, footballMonitor},
+        {"Balloon and stone", "Kinematics",
          "A gas balloon is going up with a constant velocity of 10 m/s. When this balloon reached a height of 75 m, a "
          "stone is dropped from it and the balloon keeps moving up with the same velocity. The height of the balloon "
          "when the stone hits the ground is ____ m. (Take g = 10 m/s^2)",
          "125 m. The dropped stone starts with the balloon's velocity, 10 m/s upward. Taking up as positive: "
          "-75 = 10t - 5t^2, so t^2 - 2t - 15 = 0 and t = 5 s. The balloon rises 10 x 5 = 50 m more: 75 + 50 = 125 m.",
          125.0f, balloonSetup, {0.0f, 66.0f}, 3.0f, "Stone", 1, balloonMonitor},
-        {"Blocks A, B, C (as drawn)",
+        {"Blocks A, B, C (as drawn)", "Friction",
          "In the given figure the blocks A, B and C weigh 4 kg, 6 kg and 8 kg respectively. The coefficient of sliding "
          "friction between any two surfaces is 0.5. The force F required to slide the block C with constant speed is "
          "____ N. (Use g = 10 m/s^2)  [JEE Main 2026, 24 Jan]  Here A rests freely on B, exactly as in the figure.",
@@ -236,13 +331,13 @@ const std::vector<Example>& examples() {
          "0.5 x 18 x 10 = 190 N. The official key says 210 N: it puts kinetic friction 20 N between A and B, which "
          "only happens if A is held still (see the next example).",
          190.0f, blocksFree, {4.0f, 3.0f}, 30.0f, "C", 4, blocksMonitor},
-        {"Blocks A, B, C (A held)",
+        {"Blocks A, B, C (A held)", "Friction",
          "Same problem, but A is tied to a fixed point so it stays at rest while B slides under it. This is the "
          "situation the official answer key assumes.",
          "210 N, the official answer. A-B friction is now kinetic: 0.5 x 4 x 10 = 20 N. B: T = 20 + 50 = 70 N. "
          "C: F = f(BC) + T + f(ground) = 50 + 70 + 90 = 210 N.",
          210.0f, blocksHeld, {4.0f, 3.0f}, 30.0f, "C", 4, blocksMonitor},
-        {"Gas heated under a piston",
+        {"Gas heated under a piston", "Thermodynamics",
          "One mole of diatomic gas having rotational modes only is kept in a cylinder with a piston system. The "
          "cross-section area of the cylinder is 4 cm^2. The gas is heated slowly to raise the temperature by 1.2 C "
          "during which the piston moves by 25 mm. The amount of heat supplied to the gas is ____ J. (Atmospheric "

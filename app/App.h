@@ -2,12 +2,14 @@
 #include "Renderer.h"
 #include "Scenes.h"
 #include "Ui.h"
+#include "Viewer3.h"
 #include "editor/Editor.h"
 #include <deque>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 
-enum class Screen { Home, Menu2D, Simulation, Editor };
+enum class Screen { Home, Menu2D, Simulation, Editor, EditorPick, Problems };
 
 struct Grab {
     pe::MouseJoint* joint = nullptr;
@@ -29,7 +31,14 @@ public:
     void handleEvent(const SDL_Event& e);
     void frame(float dt);
     bool running() const { return running_; }
-    bool take3DRequest() { return std::exchange(open3D_, false); }
+    // the 3D window to open, if the user asked for one this frame
+    std::optional<view3d::Launch> take3DRequest() { return std::exchange(open3D_, std::nullopt); }
+    void resumeAfter3D(const view3d::Launch& from); // back on the screen the 3D window was opened from
+
+    // read-only views for the UI tests
+    Screen screen() const { return screen_; }
+    int problemTab() const { return problemTab_; }
+    const editor::Editor& editor() const { return editor_; }
 
 private:
     Camera cam_;
@@ -38,7 +47,8 @@ private:
     editor::Editor editor_;
     Screen screen_ = Screen::Home;
     bool running_ = true;
-    bool open3D_ = false;
+    std::optional<view3d::Launch> open3D_;
+    int problemTab_ = 0; // 0 = 2D problems, 1 = 3D problems
 
     pe::World world_;
     pe::World backdrop_;
@@ -66,6 +76,8 @@ private:
     void simulate(pe::World& world, float dt, bool interactive);
 
     void drawHome();
+    void drawEditorPick();
+    void drawProblems();
     void drawMenu2D();
     void drawSimulation();
     void drawBackdrop(float dt);

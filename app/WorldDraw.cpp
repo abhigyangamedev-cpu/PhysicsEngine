@@ -115,7 +115,7 @@ void drawWorld(Renderer& gfx, const World& world, bool showContacts) {
     }
 
     if (showContacts) {
-        for (const auto& [key, m] : world.manifolds()) {
+        for (const auto& m : world.manifolds()) {
             for (int i = 0; i < m.count; ++i) {
                 gfx.point(m.contacts[i].point, 5.0f, {255, 60, 60});
                 gfx.line(m.contacts[i].point, m.contacts[i].point + m.normal * 0.3f, {255, 255, 255});

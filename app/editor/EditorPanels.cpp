@@ -1,3 +1,4 @@
+#include "InspectorRows.h"
 #include "editor/Layout.h"
 #include <algorithm>
 #include <cmath>
@@ -29,12 +30,16 @@ float plotValue(const Sample& s, Plot p) {
 void Editor::drawToolbar() {
     const float W = float(cam_.width);
     ui_.panel({0, 0, W, kTop});
-    if (ui_.button({12, 10, 84, kTop - 20}, "< Home", false, 1.25f)) {
+    if (ui_.button({12, 10, problemMode_ ? 110.0f : 84.0f, kTop - 20}, problemMode_ ? "< Problems" : "< Home", false, 1.25f)) {
         exit_ = true;
         return;
     }
     float x = 108.0f;
-    for (int i = 0; i < static_cast<int>(std::size(kToolNames)); ++i) {
+    if (problemMode_) {
+        const std::string title = std::string("2D problem: ") + examples()[example_].name;
+        ui_.label(134.0f, (kTop - Renderer::textHeight(1.5f)) * 0.5f, title.c_str(), theme::text, 1.5f);
+    }
+    for (int i = 0; i < static_cast<int>(std::size(kToolNames)) && !problemMode_; ++i) {
         float w = Renderer::textWidth(kToolNames[i], 1.25f) + 20.0f;
         if (ui_.button({x, 10, w, kTop - 20}, kToolNames[i], tool_ == static_cast<Tool>(i), 1.25f)) {
             if (started_ && i != 0) {
@@ -80,9 +85,11 @@ void Editor::drawToolbar() {
         x += w + 5.0f;
         return clicked;
     };
-    if (action("Save")) saveScene();
-    if (action("Load")) loadScene();
-    if (action("New")) newScene();
+    if (!problemMode_) {
+        if (action("Save")) saveScene();
+        if (action("Load")) loadScene();
+        if (action("New")) newScene();
+    }
 
     char buf[64];
     std::snprintf(buf, sizeof buf, "t = %.3f s", sim_.time());
@@ -100,17 +107,9 @@ void Editor::drawInspector() {
     ui_.panel({x, y, kInspW, H - y - kHint}, {26, 29, 37, 240});
     gfx_.fillRect({x, y, 1.0f, H - y - kHint}, theme::border);
 
-    static constexpr const char* kTabs[] = {"Inspector", "Standard Examples"};
-    float tx = x + 10.0f;
-    for (int i = 0; i < 2; ++i) {
-        float w = Renderer::textWidth(kTabs[i], 1.0f) + 22.0f;
-        if (ui_.button({tx, y + 8.0f, w, 24.0f}, kTabs[i], panelTab_ == i, 1.0f)) panelTab_ = i;
-        tx += w + 6.0f;
-    }
-    gfx_.fillRect({x, y + 38.0f, kInspW, 1.0f}, theme::border);
-    const float top = y + 48.0f;
-    if (panelTab_ == 1) {
-        drawExamples(x + 14.0f, top, kInspW - 28.0f);
+    const float top = y + 12.0f;
+    if (problemMode_) {
+        drawProblemPanel(x + 14.0f, top, kInspW - 28.0f);
         return;
     }
 
@@ -121,83 +120,11 @@ void Editor::drawInspector() {
     else drawWorldInspector(x + 14.0f, top, kInspW - 28.0f);
 }
 
-namespace {
-
-// Lays out inspector rows: a label, then one or two number fields.
-struct Rows {
-    Ui& ui;
-    float x, y, w;
-    bool enabled;
-    bool changed = false;
-    static constexpr float kRowH = 28.0f, kLabelW = 118.0f;
-
-    void header(const char* title, const char* sub = nullptr) {
-        ui.label(x, y, title, theme::text, 1.75f);
-        y += Renderer::textHeight(1.75f) + 6.0f;
-        if (sub) {
-            ui.label(x, y, sub, theme::textFaint, 1.0f);
-            y += Renderer::textHeight(1.0f) + 6.0f;
-        }
-        y += 6.0f;
-    }
-    void section(const char* title) {
-        y += 6.0f;
-        ui.label(x, y, title, theme::textDim, 1.25f);
-        y += Renderer::textHeight(1.25f) + 8.0f;
-    }
-    void label(const char* s) { ui.label(x, y + (kRowH - 4.0f - Renderer::textHeight(1.0f)) * 0.5f, s, theme::textDim, 1.0f); }
-    bool one(const char* name, int id, float& v, float step) {
-        label(name);
-        bool c = ui.numberField({x + kLabelW, y, w - kLabelW, kRowH - 4.0f}, id, v, step, enabled);
-        y += kRowH;
-        changed |= c;
-        return c;
-    }
-    bool two(const char* name, int id, float& a, float& b, float step, bool* first = nullptr) {
-        label(name);
-        const float fw = (w - kLabelW - 6.0f) * 0.5f;
-        bool ca = ui.numberField({x + kLabelW, y, fw, kRowH - 4.0f}, id, a, step, enabled);
-        bool cb = ui.numberField({x + kLabelW + fw + 6.0f, y, fw, kRowH - 4.0f}, id + 1, b, step, enabled);
-        y += kRowH;
-        if (first) *first = ca;
-        changed |= ca || cb;
-        return ca || cb;
-    }
-    bool toggles(std::initializer_list<std::pair<const char*, bool*>> items) {
-        float tx = x;
-        bool any = false;
-        for (auto [name, v] : items) {
-            float bw = Renderer::textWidth(name, 1.0f) + 18.0f;
-            if (ui.button({tx, y, bw, kRowH - 6.0f}, name, *v, 1.0f) && enabled) {
-                *v = !*v;
-                any = true;
-            }
-            tx += bw + 6.0f;
-        }
-        y += kRowH;
-        changed |= any;
-        return any;
-    }
-    void text(const char* fmt, double a = 0, double b = 0, double c = 0) {
-        char buf[96];
-        std::snprintf(buf, sizeof buf, fmt, a, b, c);
-        ui.label(x, y, buf, theme::text, 1.0f);
-        y += Renderer::textHeight(1.0f) + 7.0f;
-    }
-    float note(const char* s) {
-        float h = ui.paragraph(x, y, w, s, theme::textFaint, 1.0f, 5.0f);
-        y += h + 4.0f;
-        return h;
-    }
-};
-
-} // namespace
-
 void Editor::drawObjectInspector(ObjectSpec& o, float x, float y, float w) {
     static constexpr const char* kKinds[] = {"Block", "Ball", "Wedge"};
     char title[64];
     std::snprintf(title, sizeof title, "%s %s", kKinds[int(o.kind)], o.name.c_str());
-    Rows r{ui_, x, y, w, !started_};
+    Rows r{ui_, x, y, w, !locked()};
     r.header(title, started_ ? "initial values (Reset to edit)" : "initial values, type or scroll to change");
     const int id = 1000 + o.id * 64;
 
@@ -230,7 +157,7 @@ void Editor::drawObjectInspector(ObjectSpec& o, float x, float y, float w) {
         dirty_ = true;
     }
 
-    if (!started_) {
+    if (!locked()) {
         r.y += 4.0f;
         if (ui_.button({x, r.y, 110, 26}, "Duplicate", false, 1.0f)) duplicateSelection();
         if (ui_.button({x + 118, r.y, 90, 26}, "Delete", false, 1.0f)) {
@@ -263,14 +190,14 @@ void Editor::drawLinkInspector(LinkSpec& l, float x, float y, float w) {
     char title[96], sub[96];
     std::snprintf(title, sizeof title, "%s", kLinkNames[int(l.kind)]);
     std::snprintf(sub, sizeof sub, "%s  to  %s", nameOf(l.a).c_str(), nameOf(l.b).c_str());
-    Rows r{ui_, x, y, w, !started_};
+    Rows r{ui_, x, y, w, !locked()};
     r.header(title, sub);
     const int id = 500000 + l.id * 32;
 
     float shown = l.length >= 0.0f ? l.length : scene_.initialLength(l);
     auto lengthRow = [&](const char* name) {
         if (r.one(name, id + 4, shown, 0.1f)) l.length = std::max(shown, 0.0f);
-        if (!started_ && ui_.button({x, r.y, 160, 24}, l.length < 0.0f ? "auto: as placed" : "use placed length",
+        if (!locked() && ui_.button({x, r.y, 160, 24}, l.length < 0.0f ? "auto: as placed" : "use placed length",
                                     l.length < 0.0f, 1.0f)) {
             l.length = -1.0f;
             dirty_ = true;
@@ -294,7 +221,7 @@ void Editor::drawLinkInspector(LinkSpec& l, float x, float y, float w) {
         l.sanitize();
         dirty_ = true;
     }
-    if (!started_) {
+    if (!locked()) {
         if (ui_.button({x, r.y, 90, 26}, "Delete", false, 1.0f)) {
             deleteSelection();
             return;
@@ -325,14 +252,14 @@ void Editor::drawLinkInspector(LinkSpec& l, float x, float y, float w) {
 
 void Editor::drawWorldInspector(float x, float y, float w) {
     WorldSpec& ws = scene_.world;
-    Rows r{ui_, x, y, w, !started_};
+    Rows r{ui_, x, y, w, !locked()};
     r.header("World", "nothing selected: scene settings");
     const int id = 900000;
     r.one("g m/s^2", id, ws.g, 0.1f);
     r.enabled = true; // these can change mid-run
     r.one("Time scale", id + 1, ws.timeScale, 0.1f);
     r.one("Stop at t s", id + 2, ws.stopAt, 0.5f);
-    r.enabled = !started_;
+    r.enabled = !locked();
     r.one("Air drag 1/s", id + 3, ws.drag, 0.05f);
     r.two("E field V/m", id + 4, ws.E.x, ws.E.y, 1.0f);
     r.one("Bz T (+out)", id + 6, ws.B, 0.1f);
@@ -362,20 +289,10 @@ void Editor::drawWorldInspector(float x, float y, float w) {
     r.note("Contact friction uses the smaller u of the two surfaces, so ground is u = 1 and the object's u decides.");
 }
 
-void Editor::drawExamples(float x, float y, float w) {
-    const auto& list = examples();
-    ui_.label(x, y, "Pick a problem to load it", theme::textDim, 1.0f);
+void Editor::drawProblemPanel(float x, float y, float w) {
+    const Example& ex = examples()[example_];
+    ui_.label(x, y, ex.topic, theme::accentHover, 1.0f);
     y += 18.0f;
-    for (int i = 0; i < static_cast<int>(list.size()); ++i) {
-        char name[64];
-        std::snprintf(name, sizeof name, "%d. %s", i + 1, list[i].name);
-        if (ui_.button({x, y, w, 26.0f}, name, i == example_, 1.0f)) loadExample(i);
-        y += 32.0f;
-    }
-    if (example_ < 0) return;
-
-    const Example& ex = list[example_];
-    y += 8.0f;
     ui_.label(x, y, "Question", theme::text, 1.25f);
     y += 18.0f;
     y += ui_.paragraph(x, y, w, ex.question, theme::textDim, 1.0f, 5.0f) + 6.0f;
@@ -394,9 +311,23 @@ void Editor::drawExamples(float x, float y, float w) {
         ui_.label(x, y, line.c_str(), exampleRun_.done ? theme::accentHover : theme::text, 1.0f);
         y += 16.0f;
     }
+    if (exampleRun_.done) {
+        char buf[96];
+        std::snprintf(buf, sizeof buf, "textbook %.4g  (sim %+.2f%%)", ex.expected,
+                      100.0 * (exampleRun_.result - ex.expected) / ex.expected);
+        ui_.label(x, y + 4.0f, buf, theme::textDim, 1.0f);
+        y += 20.0f;
+    }
     y += 10.0f;
     if (ui_.button({x, y, 150.0f, 26.0f}, showAnswer_ ? "Hide solution" : "Show solution", showAnswer_, 1.0f))
         showAnswer_ = !showAnswer_;
+    if (ui_.button({x + 158.0f, y, 150.0f, 26.0f}, "Open in editor", false, 1.0f)) {
+        problemMode_ = false; // keep the scene, unlock it; the monitor stops
+        example_ = -1;
+        reset();
+        setStatus("Problem opened in the 2D editor: change anything and press Play");
+        return;
+    }
     y += 34.0f;
     if (showAnswer_) ui_.paragraph(x, y, w, ex.answer, theme::warning, 1.0f, 5.0f);
 }
@@ -487,6 +418,8 @@ void Editor::drawHints() {
     const char* hint = "";
     if (started_) {
         hint = "SPACE play/pause   . step   R reset to initial values   click to inspect   wheel zoom   MMB/RMB drag pan";
+    } else if (problemMode_) {
+        hint = "SPACE run   R restart   click an object to graph it   wheel zoom   MMB/RMB drag pan   ESC back to problems";
     } else {
         switch (tool_) {
         case Tool::Select:

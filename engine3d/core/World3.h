@@ -2,7 +2,6 @@
 #include "rigid/Collision3.h"
 #include "rigid/Joint3.h"
 #include <memory>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -62,17 +61,21 @@ public:
     RayHit raycast(Vec3 origin, Vec3 dir, float maxT = 1e30f) const;
 
     const std::vector<std::unique_ptr<Body>>& bodies() const { return bodies_; }
-    const std::unordered_map<uint64_t, Manifold>& manifolds() const { return manifolds_; }
+    // contiguous, so the solver walks memory in order; Manifold::key names the pair
+    const std::vector<Manifold>& manifolds() const { return manifolds_; }
 
 private:
     std::vector<std::unique_ptr<Body>> bodies_;
-    std::unordered_map<uint64_t, Manifold> manifolds_;
-    std::unordered_map<uint64_t, Manifold> nextManifolds_;
+    std::vector<Manifold> manifolds_, nextManifolds_;
     std::vector<std::unique_ptr<Joint>> joints_;
     std::unordered_set<uint64_t> jointPairs_;
-    std::vector<Body*> sorted_;
+    std::vector<Body*> sorted_; // broadphase order, kept between steps so re-sorting is nearly free
+    bool sortedDirty_ = true;
+    std::vector<uint64_t> slotKeys_; // open-addressing index of manifolds_ by pair key, for warm starting
+    std::vector<int> slotIndex_;
     std::vector<std::vector<Body*>> islands_;
-    std::vector<int> parent_;
+    std::vector<int> parent_, islandOf_;
+    std::vector<float> minSleep_;
     uint32_t nextId_ = 0;
     float biasRate_ = 0.0f, massScale_ = 1.0f, impulseScale_ = 0.0f, invH_ = 0.0f;
 
@@ -80,6 +83,8 @@ private:
     void wakeDisturbed();
     void updateSleep(float dt);
     bool detectContacts(); // true if it woke a sleeping island
+    void indexManifolds();
+    const Manifold* findManifold(uint64_t key) const;
     void detectUntilStable();
     bool jointActive(const Joint& j) const;
     void solveJoints(bool useBias);

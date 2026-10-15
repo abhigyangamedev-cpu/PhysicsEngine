@@ -40,6 +40,10 @@ float segmentDistance(Vec2 p, Vec2 a, Vec2 b) {
 Editor::Editor(Renderer& gfx, Ui& ui, Camera& cam) : gfx_(gfx), ui_(ui), cam_(cam), scene_(defaultScene()) {}
 
 void Editor::enter() {
+    if (problemMode_) { // a problem was showing: the sandbox starts fresh
+        problemMode_ = false;
+        newScene();
+    }
     cam_.center = {0.0f, 4.0f};
     cam_.scale = 50.0f;
     tool_ = Tool::Select;
@@ -107,6 +111,15 @@ void Editor::newScene() {
     select(0, 0);
 }
 
+void Editor::openProblem(int index) {
+    if (index < 0 || index >= static_cast<int>(examples().size())) return enter();
+    problemMode_ = true;
+    pending_.clear();
+    drag_ = Drag::None;
+    lHeld_ = rHeld_ = mHeld_ = false;
+    loadExample(index);
+}
+
 void Editor::loadExample(int index) {
     const Example& ex = examples()[index];
     scene_ = ex.setup();
@@ -165,7 +178,7 @@ void Editor::stepWorld() {
     if (example_ >= 0 && examples()[example_].monitor(sim_, exampleRun_)) {
         paused_ = true;
         accumulator_ = 0.0f;
-        setStatus("Example: the asked-for moment was reached");
+        setStatus("The asked-for moment was reached");
     }
 
     const float stopAt = scene_.world.stopAt;
@@ -306,7 +319,7 @@ void Editor::clickLinkTool(Vec2 p) {
 }
 
 void Editor::deleteSelection() {
-    if (started_) return;
+    if (locked()) return;
     if (selObj_) scene_.removeObject(selObj_);
     if (selLink_) scene_.removeLink(selLink_);
     select(0, 0);
@@ -315,7 +328,7 @@ void Editor::deleteSelection() {
 
 void Editor::duplicateSelection() {
     const ObjectSpec* src = selObj_ ? scene_.object(selObj_) : nullptr;
-    if (started_ || !src) return;
+    if (locked() || !src) return;
     ObjectSpec o = *src;
     o.id = scene_.nextId++;
     if (!o.fixed) o.name = scene_.nextName();
@@ -365,9 +378,9 @@ void Editor::handleEvent(const SDL_Event& e) {
             togglePlay();
         } else if (key == SDLK_R) {
             reset();
-        } else if (key == SDLK_S && ctrl) {
+        } else if (key == SDLK_S && ctrl && !problemMode_) {
             saveScene();
-        } else if (key == SDLK_O && ctrl) {
+        } else if (key == SDLK_O && ctrl && !problemMode_) {
             loadScene();
         } else if (key == SDLK_D && ctrl) {
             duplicateSelection();
@@ -375,17 +388,17 @@ void Editor::handleEvent(const SDL_Event& e) {
             stepOnce();
         } else if (key == SDLK_DELETE || key == SDLK_BACKSPACE) {
             deleteSelection();
-        } else if ((key == SDLK_Q || key == SDLK_E) && selObj_ && !started_) {
+        } else if ((key == SDLK_Q || key == SDLK_E) && selObj_ && !locked()) {
             if (ObjectSpec* o = scene_.object(selObj_)) {
                 o->angleDeg += key == SDLK_Q ? 5.0f : -5.0f;
                 dirty_ = true;
             }
         } else if (key == SDLK_G) {
             showGraph_ = !showGraph_;
-        } else if (key >= SDLK_1 && key <= SDLK_9 && !started_) {
+        } else if (key >= SDLK_1 && key <= SDLK_9 && !locked()) {
             tool_ = static_cast<Tool>(key - SDLK_1);
             pending_.clear();
-        } else if (key == SDLK_0 && !started_) {
+        } else if (key == SDLK_0 && !locked()) {
             tool_ = Tool::Pulley;
             pending_.clear();
         } else if (key == SDLK_LEFT) cam_.center.x -= 1.0f;
@@ -405,7 +418,7 @@ void Editor::handleCanvas() {
         return;
     }
     if (rPress_) {
-        const int obj = started_ ? 0 : objectAt(p);
+        const int obj = locked() ? 0 : objectAt(p);
         const ObjectSpec* o = obj ? scene_.object(obj) : nullptr;
         if (o && !o->fixed) {
             select(obj, 0);
@@ -418,8 +431,8 @@ void Editor::handleCanvas() {
     }
     if (!lPress_) return;
 
-    if (started_ || tool_ == Tool::Select) {
-        if (!started_ && selLink_) {
+    if (locked() || tool_ == Tool::Select) {
+        if (!locked() && selLink_) {
             const LinkSpec* l = scene_.link(selLink_);
             const float tol = 10.0f / cam_.scale;
             if (l && l->kind == LinkKind::Pulley && (p - l->wheel).length() < l->wheelRadius + tol) {
@@ -437,7 +450,7 @@ void Editor::handleCanvas() {
         }
         if (int obj = objectAt(p)) {
             select(obj, 0);
-            if (!started_) {
+            if (!locked()) {
                 drag_ = Drag::Object;
                 pressAt_ = mouse_;
                 dragMoved_ = false;
@@ -663,7 +676,7 @@ void Editor::drawOverlays() {
             Vec2 s = cam_.toScreen(p);
             gfx_.strokeRect({s.x - 5.0f, s.y - 5.0f, 10.0f, 10.0f}, accent);
         };
-        if (!started_) {
+        if (!locked()) {
             if (l.a.obj < 0) handle(l.a.local);
             if (l.b.obj < 0 && l.kind != LinkKind::Hinge) handle(l.b.local);
             if (l.kind == LinkKind::Pulley) handle(l.wheel);

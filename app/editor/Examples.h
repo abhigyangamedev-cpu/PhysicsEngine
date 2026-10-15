@@ -13,8 +13,10 @@ struct ExampleRun {
     std::vector<std::string> lines;
 };
 
+// A real-life problem the 2D simulation answers.
 struct Example {
     const char* name;
+    const char* topic;
     const char* question;
     const char* answer;
     float expected; // textbook value of the asked-for quantity

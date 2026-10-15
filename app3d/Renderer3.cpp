@@ -69,6 +69,18 @@ Vec3 Camera::ray(float x, float y, float aspect) const {
     return (f + s * (x * t * aspect) + u * (y * t)).normalized();
 }
 
+bool Camera::project(Vec3 p, float width, float height, float& x, float& y) const {
+    const Mat4 vp = projection(width / std::max(height, 1.0f)) * view();
+    const float* m = vp.m;
+    const float cx = m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12];
+    const float cy = m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13];
+    const float cw = m[3] * p.x + m[7] * p.y + m[11] * p.z + m[15];
+    if (cw <= 1e-4f) return false;
+    x = (cx / cw * 0.5f + 0.5f) * width;
+    y = (0.5f - cy / cw * 0.5f) * height;
+    return true;
+}
+
 namespace {
 
 const char* kVertex = R"(#version 330 core
@@ -323,6 +335,13 @@ bool Renderer3::init() {
     program_ = linkProgram(kVertex, kFragment);
     shadowProgram_ = linkProgram(kShadowVertex, kShadowFragment);
     if (!program_ || !shadowProgram_) return false;
+    uViewProj_ = glGetUniformLocation(program_, "uViewProj");
+    uLightViewProj_ = glGetUniformLocation(program_, "uLightViewProj");
+    uLightDir_ = glGetUniformLocation(program_, "uLightDir");
+    uEye_ = glGetUniformLocation(program_, "uEye");
+    uSky_ = glGetUniformLocation(program_, "uSky");
+    uShadow_ = glGetUniformLocation(program_, "uShadow");
+    uShadowLightVP_ = glGetUniformLocation(shadowProgram_, "uLightViewProj");
 
     glGenBuffers(1, &instanceVbo_);
     std::vector<float> v;
@@ -364,7 +383,7 @@ void Renderer3::drawInstances(const Mesh& mesh, const std::vector<float>& data) 
 }
 
 void Renderer3::draw(const pe3::World& world, const Camera& cam, int width, int height, const pe3::Body* highlight,
-                     bool tintSleeping) {
+                     bool tintSleeping, std::span<const Line3> extras) {
     boxes_.clear();
     spheres_.clear();
     for (const auto& b : world.bodies()) {
@@ -390,6 +409,8 @@ void Renderer3::draw(const pe3::World& world, const Camera& cam, int width, int 
         }
     }
 
+    for (const Line3& l : extras) pushSegment(boxes_, l.a, l.b, l.radius, l.color);
+
     const Vec3 lightDir = Vec3{-0.55f, 1.0f, 0.25f}.normalized();
     const Vec3 focus{cam.target.x, 0.0f, cam.target.z};
     const float extent = std::clamp(cam.distance * 1.2f, 12.0f, 60.0f);
@@ -399,7 +420,7 @@ void Renderer3::draw(const pe3::World& world, const Camera& cam, int width, int 
     glViewport(0, 0, kShadowSize, kShadowSize);
     glClear(GL_DEPTH_BUFFER_BIT);
     glUseProgram(shadowProgram_);
-    glUniformMatrix4fv(glGetUniformLocation(shadowProgram_, "uLightViewProj"), 1, GL_FALSE, lightVP.m);
+    glUniformMatrix4fv(uShadowLightVP_, 1, GL_FALSE, lightVP.m);
     glCullFace(GL_FRONT);
     drawInstances(cube_, boxes_);
     drawInstances(sphere_, spheres_);
@@ -414,14 +435,14 @@ void Renderer3::draw(const pe3::World& world, const Camera& cam, int width, int 
     const float aspect = static_cast<float>(width) / std::max(height, 1);
     const Mat4 viewProj = cam.projection(aspect) * cam.view();
     const Vec3 eye = cam.eye();
-    glUniformMatrix4fv(glGetUniformLocation(program_, "uViewProj"), 1, GL_FALSE, viewProj.m);
-    glUniformMatrix4fv(glGetUniformLocation(program_, "uLightViewProj"), 1, GL_FALSE, lightVP.m);
-    glUniform3f(glGetUniformLocation(program_, "uLightDir"), lightDir.x, lightDir.y, lightDir.z);
-    glUniform3f(glGetUniformLocation(program_, "uEye"), eye.x, eye.y, eye.z);
-    glUniform3f(glGetUniformLocation(program_, "uSky"), sky.x, sky.y, sky.z);
+    glUniformMatrix4fv(uViewProj_, 1, GL_FALSE, viewProj.m);
+    glUniformMatrix4fv(uLightViewProj_, 1, GL_FALSE, lightVP.m);
+    glUniform3f(uLightDir_, lightDir.x, lightDir.y, lightDir.z);
+    glUniform3f(uEye_, eye.x, eye.y, eye.z);
+    glUniform3f(uSky_, sky.x, sky.y, sky.z);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, shadowTex_);
-    glUniform1i(glGetUniformLocation(program_, "uShadow"), 0);
+    glUniform1i(uShadow_, 0);
     drawInstances(cube_, boxes_);
     drawInstances(sphere_, spheres_);
 }

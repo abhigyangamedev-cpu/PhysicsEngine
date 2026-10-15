@@ -80,6 +80,9 @@ add_executable(PhysicsEngine
         app3d/Gl.cpp
         app3d/Renderer3.cpp
         app3d/Scenes3.cpp
+        app3d/EditorScene3.cpp
+        app3d/Problems3.cpp
+        app3d/Editor3.cpp
 )
 target_include_directories(PhysicsEngine PRIVATE app app3d)
 target_link_libraries(PhysicsEngine PRIVATE physics physics3d SDL3::SDL3)
@@ -92,6 +95,9 @@ add_executable(PhysicsEngine3D
         app3d/Gl.cpp
         app3d/Renderer3.cpp
         app3d/Scenes3.cpp
+        app3d/EditorScene3.cpp
+        app3d/Problems3.cpp
+        app3d/Editor3.cpp
         app/Ui.cpp
         app/Renderer.cpp
         app/Expr.cpp
@@ -135,9 +141,48 @@ add_executable(physics3d_tests
         tests/main.cpp
         tests3d/PhysicsTests3.cpp
         tests3d/JointTests3.cpp
+        tests3d/ProblemTests3.cpp
         app3d/Scenes3.cpp
+        app3d/EditorScene3.cpp
+        app3d/Problems3.cpp
 )
 target_include_directories(physics3d_tests PRIVATE app3d tests)
 target_link_libraries(physics3d_tests PRIVATE physics3d)
 target_compile_options(physics3d_tests PRIVATE -Wall -Wextra)
 add_test(NAME physics3d_tests COMMAND physics3d_tests)
+
+# Drives the real app windows (needs a display): every screen, problem and 3D mode opens, runs and exits.
+add_executable(ui_tests
+        tests/main.cpp
+        tests/UiTests.cpp
+        app/App.cpp
+        app/Ui.cpp
+        app/Renderer.cpp
+        app/WorldDraw.cpp
+        app/Expr.cpp
+        app/editor/EditorScene.cpp
+        app/editor/Editor.cpp
+        app/editor/EditorPanels.cpp
+        app/editor/Simulation.cpp
+        app/editor/Examples.cpp
+        app/Scenes.cpp
+        app/scenes/Machines.cpp
+        app/scenes/Oscillations.cpp
+        app/scenes/Collisions.cpp
+        app/scenes/Projectiles.cpp
+        app/scenes/Rotation.cpp
+        app/scenes/Thermo.cpp
+        app/scenes/Optics.cpp
+        app3d/Viewer3.cpp
+        app3d/Overlay3.cpp
+        app3d/Gl.cpp
+        app3d/Renderer3.cpp
+        app3d/Scenes3.cpp
+        app3d/EditorScene3.cpp
+        app3d/Problems3.cpp
+        app3d/Editor3.cpp
+)
+target_include_directories(ui_tests PRIVATE app app3d tests)
+target_link_libraries(ui_tests PRIVATE physics physics3d SDL3::SDL3)
+target_compile_options(ui_tests PRIVATE -Wall -Wextra)
+add_test(NAME ui_tests COMMAND ui_tests)

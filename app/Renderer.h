@@ -50,4 +50,8 @@ private:
     Camera& cam_;
     std::vector<SDL_Vertex> batchVerts_;
     std::vector<int> batchIndices_;
+    // scratch for polygon(), reused so drawing a body allocates nothing
+    std::vector<SDL_Vertex> polyVerts_;
+    std::vector<SDL_FPoint> polyLoop_;
+    std::vector<int> polyIndices_;
 };

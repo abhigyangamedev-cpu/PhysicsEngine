@@ -38,12 +38,20 @@ protected:
     void applyAngular(Vec3 impulse);   // +impulse to b, -impulse to a
 };
 
-// Ball and socket: the anchors coincide, rotation is free apart from optional joint friction.
+// Ball and socket: the anchors coincide, rotation is free apart from optional joint friction
+// and an optional swing cone.
 class BallJoint : public Joint {
 public:
     BallJoint(Body* a, Body* b, Vec3 worldAnchor);
 
     float maxFrictionTorque = 0.0f; // resists relative spin, like a stiff shoulder
+
+    // Keeps a direction fixed in b (worldAxis as placed) within `angle` radians of the same direction
+    // fixed in a, like a neck that can nod and tilt but not fold the head into the chest.
+    void limitSwing(Vec3 worldAxis, float angle);
+    bool enableCone = false;
+    float coneAngle = 0.0f;
+    float swingAngle() const; // current angle between the two directions
 
     void prepare(float h) override;
     void solve(bool useBias) override;
@@ -52,6 +60,12 @@ private:
     Vec3 error_, impulse_, frictionImpulse_;
     Mat3 k_, kAng_;
     float maxFrictionImpulse_ = 0.0f;
+    Vec3 coneA_, coneB_, coneAxis_;
+    float coneMass_ = 0.0f, swing_ = 0.0f, coneImpulse_ = 0.0f;
+    bool pivotTurn_ = false; // one side is fixed: the limit turns the other about the pivot
+    float pivotInertia_ = 0.0f;
+
+    void applyCone(float impulse); // angular impulse along coneAxis_: + to b, - to a
     Softness soft_;
 };
 

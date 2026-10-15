@@ -1,10 +1,26 @@
 #include "core/World.h"
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 namespace pe {
 
 namespace {
+
+// Broadphase order puts contacts sharing a body next to each other, and solving them back to back
+// stalls on each other's velocity writes. Visiting them with a golden-ratio stride keeps neighbours
+// apart; the result lands in out.
+void spreadOut(std::vector<Manifold>& in, std::vector<Manifold>& out) {
+    const size_t n = in.size();
+    if (n < 8) {
+        std::swap(in, out);
+        return;
+    }
+    size_t stride = n * 618 / 1000;
+    while (std::gcd(stride, n) != 1) ++stride;
+    out.resize(n);
+    for (size_t i = 0, k = 0; i < n; ++i, k = (k + stride) % n) out[i] = in[k];
+}
 
 uint64_t pairKey(const Body* a, const Body* b) {
     uint32_t i = a->id, j = b->id;
@@ -17,6 +33,7 @@ uint64_t pairKey(const Body* a, const Body* b) {
 Body* World::createBody(const Shape& shape, const BodyDef& def) {
     auto body = std::make_unique<Body>(shape, def);
     body->id = nextId_++;
+    sortedDirty_ = true;
     bodies_.push_back(std::move(body));
     return bodies_.back().get();
 }
@@ -26,8 +43,9 @@ void World::destroyBody(Body* body) {
     rebuildJointPairs();
     for (auto& f : fields_) f->removeBody(body);
     particles.removeBody(body);
-    std::erase_if(manifolds_, [body](const auto& kv) { return kv.second.a == body || kv.second.b == body; });
+    std::erase_if(manifolds_, [body](const Manifold& m) { return m.a == body || m.b == body; });
     std::erase_if(bodies_, [body](const auto& p) { return p.get() == body; });
+    sortedDirty_ = true;
 }
 
 void World::destroyJoint(Joint* joint) {
@@ -49,6 +67,8 @@ void World::clear() {
     fluid.clear();
     manifolds_.clear();
     bodies_.clear();
+    sorted_.clear();
+    sortedDirty_ = true;
 }
 
 Body* World::bodyAt(Vec2 point) const {
@@ -113,14 +133,43 @@ void World::integrateVelocities(float h) {
     }
 }
 
-void World::detectContacts() {
-    std::vector<Body*> sorted;
-    sorted.reserve(bodies_.size());
-    for (auto& b : bodies_) sorted.push_back(b.get());
-    std::sort(sorted.begin(), sorted.end(), [](Body* a, Body* b) { return a->aabb.min.x < b->aabb.min.x; });
+void World::indexManifolds() {
+    size_t size = 16;
+    while (size < manifolds_.size() * 2) size *= 2;
+    slotKeys_.assign(size, ~0ull);
+    slotIndex_.resize(size);
+    for (int i = 0; i < static_cast<int>(manifolds_.size()); ++i) {
+        size_t s = (manifolds_[i].key * 0x9E3779B97F4A7C15ull) >> 32 & (size - 1);
+        while (slotKeys_[s] != ~0ull) s = (s + 1) & (size - 1);
+        slotKeys_[s] = manifolds_[i].key;
+        slotIndex_[s] = i;
+    }
+}
 
-    std::unordered_map<uint64_t, Manifold> next;
-    next.reserve(manifolds_.size());
+const Manifold* World::findManifold(uint64_t key) const {
+    const size_t mask = slotKeys_.size() - 1;
+    for (size_t s = (key * 0x9E3779B97F4A7C15ull) >> 32 & mask; slotKeys_[s] != ~0ull; s = (s + 1) & mask)
+        if (slotKeys_[s] == key) return &manifolds_[slotIndex_[s]];
+    return nullptr;
+}
+
+void World::detectContacts() {
+    // bodies barely move between substeps, so insertion sort on last order is close to linear
+    auto& sorted = sorted_;
+    if (sortedDirty_) {
+        sorted.clear();
+        for (auto& b : bodies_) sorted.push_back(b.get());
+        sortedDirty_ = false;
+    }
+    for (size_t i = 1; i < sorted.size(); ++i) {
+        Body* b = sorted[i];
+        size_t j = i;
+        for (; j > 0 && sorted[j - 1]->aabb.min.x > b->aabb.min.x; --j) sorted[j] = sorted[j - 1];
+        sorted[j] = b;
+    }
+    indexManifolds();
+    auto& next = nextManifolds_;
+    next.clear();
 
     for (size_t i = 0; i < sorted.size(); ++i) {
         Body* a = sorted[i];
@@ -130,16 +179,19 @@ void World::detectContacts() {
             if ((a->isStatic && b->isStatic) || !a->collides || !b->collides) continue;
             if (a->group != 0 && a->group == b->group) continue;
             if (!a->aabb.overlaps(b->aabb)) continue;
-            if (!jointPairs_.empty() && jointPairs_.contains(pairKey(a, b))) continue;
-
-            Manifold m;
-            if (!(a->id < b->id ? collide(a, b, m) : collide(b, a, m))) continue;
-
             const uint64_t key = pairKey(a, b);
-            if (auto old = manifolds_.find(key); old != manifolds_.end()) {
+            if (!jointPairs_.empty() && jointPairs_.contains(key)) continue;
+
+            Manifold& m = next.emplace_back();
+            if (!(a->id < b->id ? collide(a, b, m) : collide(b, a, m))) {
+                next.pop_back();
+                continue;
+            }
+            m.key = key;
+            if (const Manifold* old = findManifold(key)) {
                 for (int k = 0; k < m.count; ++k) {
-                    for (int o = 0; o < old->second.count; ++o) {
-                        const auto& oc = old->second.contacts[o];
+                    for (int o = 0; o < old->count; ++o) {
+                        const auto& oc = old->contacts[o];
                         if (oc.feature == m.contacts[k].feature) {
                             m.contacts[k].normalImpulse = oc.normalImpulse;
                             m.contacts[k].tangentImpulse = oc.tangentImpulse;
@@ -148,15 +200,14 @@ void World::detectContacts() {
                     }
                 }
             }
-            next.emplace(key, m);
         }
     }
-    manifolds_ = std::move(next);
+    spreadOut(next, manifolds_);
 }
 
 void World::prepareContacts(float h) {
     contactSoft_ = Softness::make(std::min(settings.contactHertz, 0.25f / h), settings.contactDampingRatio, h);
-    for (auto& [key, m] : manifolds_) {
+    for (Manifold& m : manifolds_) {
         Body* a = m.a;
         Body* b = m.b;
         const Vec2 n = m.normal;
@@ -190,7 +241,7 @@ void World::applyRestitution() {
     // A few passes so two-point contacts (a box face) converge together; a single sequential
     // pass lets the first point's impulse spin the body and the second overshoot.
     for (int pass = 0; pass < 4; ++pass) {
-    for (auto& [key, m] : manifolds_) {
+    for (Manifold& m : manifolds_) {
         Body* a = m.a;
         Body* b = m.b;
         const float e = std::max(a->restitution, b->restitution);
@@ -211,7 +262,7 @@ void World::applyRestitution() {
 }
 
 void World::solveContacts(bool useBias) {
-    for (auto& [key, m] : manifolds_) {
+    for (Manifold& m : manifolds_) {
         Body* a = m.a;
         Body* b = m.b;
         const Vec2 n = m.normal;

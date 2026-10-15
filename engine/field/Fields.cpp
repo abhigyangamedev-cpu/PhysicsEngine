@@ -1,4 +1,5 @@
 #include "field/Fields.h"
+#include "core/Parallel.h"
 #include "core/World.h"
 #include <cmath>
 #include <numbers>
@@ -21,18 +22,21 @@ void NBodyGravity::apply(World& world, float h) {
     }
     tree_.build(positions_, masses_);
 
+    // the tree is read-only from here, and each walk touches only its own body or particle
     const float eps2 = softening * softening;
-    int index = 0;
-    for (const auto& b : world.bodies()) {
-        if (!b->isStatic) b->velocity += tree_.acceleration(b->position, G, eps2, theta, index) * h;
-        ++index;
-    }
-    if (includeParticles) {
-        for (auto& p : ps) {
-            if (p.invMass > 0.0f) p.velocity += tree_.acceleration(p.position, G, eps2, theta, index) * h;
-            ++index;
+    const auto& bodies = world.bodies();
+    const size_t nb = bodies.size();
+    parallelFor(positions_.size(), [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            const int self = static_cast<int>(i);
+            if (i < nb) {
+                Body& b = *bodies[i];
+                if (!b.isStatic) b.velocity += tree_.acceleration(b.position, G, eps2, theta, self) * h;
+            } else if (Particle& p = ps[i - nb]; p.invMass > 0.0f) {
+                p.velocity += tree_.acceleration(p.position, G, eps2, theta, self) * h;
+            }
         }
-    }
+    }, 64);
 }
 
 void CoulombField::apply(World& world, float h) {

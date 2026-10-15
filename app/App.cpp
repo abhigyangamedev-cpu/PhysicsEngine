@@ -1,4 +1,5 @@
 #include "App.h"
+#include "Problems3.h"
 #include "Scenes3.h"
 #include "WorldDraw.h"
 #include <algorithm>
@@ -137,7 +138,7 @@ void App::handleEvent(const SDL_Event& e) {
         break;
     case SDL_EVENT_MOUSE_WHEEL:
         if (screen_ == Screen::Simulation) cam_.scale *= e.wheel.y > 0 ? 1.1f : 1.0f / 1.1f;
-        if (screen_ == Screen::Menu2D) menuScroll_ -= e.wheel.y * 60.0f;
+        if (screen_ == Screen::Menu2D || screen_ == Screen::Problems) menuScroll_ -= e.wheel.y * 60.0f;
         break;
     case SDL_EVENT_KEY_DOWN: {
         const SDL_Keycode key = e.key.key;
@@ -145,7 +146,7 @@ void App::handleEvent(const SDL_Event& e) {
             if (screen_ == Screen::Simulation) {
                 grab_.end(world_);
                 screen_ = Screen::Menu2D;
-            } else if (screen_ == Screen::Menu2D) {
+            } else if (screen_ == Screen::Menu2D || screen_ == Screen::EditorPick || screen_ == Screen::Problems) {
                 screen_ = Screen::Home;
             } else {
                 running_ = false;
@@ -202,6 +203,8 @@ void App::frame(float dt) {
 
     switch (screen_) {
     case Screen::Home: drawBackdrop(dt); drawHome(); break;
+    case Screen::EditorPick: drawBackdrop(dt); drawEditorPick(); break;
+    case Screen::Problems: drawBackdrop(dt); drawProblems(); break;
     case Screen::Menu2D: drawBackdrop(dt); drawMenu2D(); break;
     case Screen::Simulation:
         if (stirring_ && leftHeld_ && dt > 0.0f) {
@@ -222,7 +225,10 @@ void App::frame(float dt) {
         break;
     case Screen::Editor:
         editor_.frame(dt);
-        if (editor_.exitRequested()) screen_ = Screen::Home;
+        if (editor_.exitRequested()) {
+            screen_ = editor_.inProblem() ? Screen::Problems : Screen::EditorPick;
+            problemTab_ = 0;
+        }
         break;
     }
     leftPressed_ = rightPressed_ = middlePressed_ = false;
@@ -259,32 +265,165 @@ void App::drawBackdrop(float dt) {
     gfx_.fillRect({0, 0, float(cam_.width), float(cam_.height)}, {18, 20, 26, 215});
 }
 
+void App::resumeAfter3D(const view3d::Launch& from) {
+    switch (from.mode) {
+    case view3d::Launch::Mode::Scenes: screen_ = Screen::Home; break;
+    case view3d::Launch::Mode::Editor: screen_ = Screen::EditorPick; break;
+    case view3d::Launch::Mode::Problem:
+        screen_ = Screen::Problems;
+        problemTab_ = 1;
+        break;
+    }
+}
+
+namespace {
+
+// Cards in one row when they fit, otherwise two per row; returns each card's rect in order.
+std::vector<SDL_FRect> cardGrid(float W, float top, int count, float maxW, float h, float gap) {
+    const int cols = W >= count * 250.0f + (count + 1) * gap ? count : 2;
+    const float cw = std::min(maxW, (W - (cols + 1) * gap) / cols);
+    const float x0 = W * 0.5f - (cols * cw + (cols - 1) * gap) * 0.5f;
+    std::vector<SDL_FRect> out;
+    for (int i = 0; i < count; ++i) out.push_back({x0 + (i % cols) * (cw + gap), top + (i / cols) * (h + gap), cw, h});
+    return out;
+}
+
+// Cuts text at a word boundary so a card's subtitle stays inside the card.
+std::string clip(const char* text, size_t maxChars) {
+    std::string s(text);
+    if (s.size() <= maxChars) return s;
+    const size_t cut = s.rfind(' ', maxChars - 3);
+    return s.substr(0, cut == std::string::npos ? maxChars - 3 : cut) + "...";
+}
+
+} // namespace
+
 void App::drawHome() {
     const float W = float(cam_.width), H = float(cam_.height);
-    ui_.labelCentered(W * 0.5f, H * 0.14f, "PHYSICS ENGINE", theme::text, 5.0f);
-    ui_.labelCentered(W * 0.5f, H * 0.14f + 58.0f, "Classical mechanics, simulated from scratch", theme::textDim, 1.75f);
-    ui_.labelCentered(W * 0.5f, H * 0.36f, "Choose a simulation space", theme::text, 2.0f);
+    ui_.labelCentered(W * 0.5f, H * 0.11f, "PHYSICS ENGINE", theme::text, 5.0f);
+    ui_.labelCentered(W * 0.5f, H * 0.11f + 58.0f, "Classical mechanics, simulated from scratch", theme::textDim, 1.75f);
+    ui_.labelCentered(W * 0.5f, H * 0.29f, "Choose a simulation space", theme::text, 2.0f);
 
-    const float gap = 28.0f;
-    const float cw = std::min(380.0f, (W - 4.0f * gap) / 3.0f), ch = 220.0f;
-    const float x0 = W * 0.5f - cw * 1.5f - gap, y = H * 0.36f + 44.0f;
-
+    const auto cards = cardGrid(W, H * 0.29f + 44.0f, 4, 320.0f, H < 700.0f ? 190.0f : 220.0f, 24.0f);
     char badge[32];
     std::snprintf(badge, sizeof badge, "%zu scenes", scenes().size());
-    if (ui_.card({x0, y, cw, ch}, "2D", "Classical mechanics, waves, heat, fields, fluids and light",
-                 "Rigid and soft bodies, machines, orbits, gases and optics", badge, true, theme::accent, 6.0f))
+    if (ui_.card(cards[0], "2D", "Classical mechanics, waves, heat, fields, fluids and light",
+                 "Rigid and soft bodies, machines, orbits, gases and optics", badge, true, theme::accent, 3.5f))
         screen_ = Screen::Menu2D;
-    if (ui_.card({x0 + cw + gap, y, cw, ch}, "Editor", "Build any problem: set masses, velocities, forces and fields",
-                 "Blocks, balls, wedges, springs, rods, ropes, hinges and pulleys", "Sandbox", true, {244, 162, 97}, 6.0f)) {
-        editor_.enter();
-        screen_ = Screen::Editor;
+    if (ui_.card(cards[1], "Editor", "Build any problem in 2D or 3D: set masses, velocities, forces and links",
+                 "Blocks, balls, wedges, springs, rods, ropes, hinges and pulleys", "2D + 3D", true, {244, 162, 97}, 3.5f))
+        screen_ = Screen::EditorPick;
+    std::snprintf(badge, sizeof badge, "%zu problems", editor::examples().size() + editor3::problems().size());
+    if (ui_.card(cards[2], "Problems", "Real-life questions solved by simulation, with worked answers",
+                 "Cars, kicks, ramps, tetherballs, billiards", badge, true, {225, 95, 130}, 3.5f)) {
+        screen_ = Screen::Problems;
+        menuScroll_ = 0.0f;
     }
     std::snprintf(badge, sizeof badge, "%zu scenes", scenes3::all().size());
-    if (ui_.card({x0 + 2.0f * (cw + gap), y, cw, ch}, "3D", "Rigid bodies and joints in three dimensions",
-                 "Pendulums, Newton's cradle, bridges, ragdolls and collapsing towers", badge, true, theme::accent, 6.0f))
-        open3D_ = true;
+    if (ui_.card(cards[3], "3D", "Rigid bodies and joints in three dimensions",
+                 "Pendulums, Newton's cradle, bridges, ragdolls and collapsing towers", badge, true, theme::accent, 3.5f))
+        open3D_ = view3d::Launch{};
 
     ui_.labelCentered(W * 0.5f, H - 40.0f, "ESC to quit", theme::textFaint, 1.25f);
+}
+
+void App::drawEditorPick() {
+    const float W = float(cam_.width), H = float(cam_.height);
+    ui_.labelCentered(W * 0.5f, kTopBar + H * 0.08f, "Which space do you want to build in?", theme::text, 2.0f);
+    const auto cards = cardGrid(W, kTopBar + H * 0.08f + 50.0f, 2, 420.0f, 230.0f, 32.0f);
+    if (ui_.card(cards[0], "2D Editor", "Blocks, balls, wedges and ground; springs, rods, ropes, hinges and pulleys",
+                 "Forces, constant-velocity drives, E and B fields, graphs of any quantity", "Sandbox", true, {244, 162, 97},
+                 4.0f)) {
+        editor_.enter();
+        screen_ = Screen::Editor;
+        return;
+    }
+    if (ui_.card(cards[1], "3D Editor", "Boxes and balls on a floor; rods, ropes, springs, ball joints and hinges",
+                 "Set position, tilt, velocity and spin in x, y, z; live readouts and graphs", "Sandbox", true, theme::accent,
+                 4.0f)) {
+        open3D_ = view3d::Launch{view3d::Launch::Mode::Editor};
+        return;
+    }
+
+    ui_.panel({0, 0, W, kTopBar});
+    if (ui_.button({12, 10, 100, kTopBar - 20}, "< Back")) screen_ = Screen::Home;
+    ui_.label(132, (kTopBar - Renderer::textHeight(2.0f)) * 0.5f, "Editor", theme::text, 2.0f);
+    ui_.label(W - 12.0f - Renderer::textWidth("ESC back", 1.25f), (kTopBar - Renderer::textHeight(1.25f)) * 0.5f, "ESC back",
+              theme::textFaint, 1.25f);
+}
+
+void App::drawProblems() {
+    const float W = float(cam_.width), H = float(cam_.height);
+    struct Item {
+        const char *name, *topic, *question;
+    };
+    std::vector<Item> items;
+    if (problemTab_ == 0)
+        for (const auto& ex : editor::examples()) items.push_back({ex.name, ex.topic, ex.question});
+    else
+        for (const auto& p : editor3::problems()) items.push_back({p.name, p.topic, p.question});
+
+    const int cols = W > 1100 ? 3 : (W > 720 ? 2 : 1);
+    const float gap = 24.0f, margin = 40.0f, ch = 200.0f;
+    const float cw = std::min(400.0f, (W - 2.0f * margin - (cols - 1) * gap) / cols);
+    const float gridW = cols * cw + (cols - 1) * gap;
+    const int rows = (static_cast<int>(items.size()) + cols - 1) / cols;
+    const float contentH = 70.0f + rows * (ch + gap) + 40.0f;
+    const float maxScroll = std::max(0.0f, contentH - (H - kTopBar - kTabBar));
+    menuScroll_ = std::clamp(menuScroll_, 0.0f, maxScroll);
+    const float x0 = (W - gridW) * 0.5f, y0 = kTopBar + kTabBar + 56.0f - menuScroll_;
+
+    ui_.labelCentered(W * 0.5f, kTopBar + kTabBar + 20.0f - menuScroll_,
+                      problemTab_ == 0 ? "Pick a question: it opens in the 2D simulation, ready to run"
+                                       : "Pick a question: it opens in the 3D simulation, ready to run",
+                      theme::textDim, 1.25f);
+    const bool belowBars = mouse_.y > kTopBar + kTabBar;
+    const size_t perLine = static_cast<size_t>((cw - 44.0f) / Renderer::textWidth("M", 1.25f));
+    for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+        const SDL_FRect r{x0 + (i % cols) * (cw + gap), y0 + (i / cols) * (ch + gap), cw, ch};
+        if (r.y > H || r.y + r.h < kTopBar + kTabBar) continue;
+        const std::string question = clip(items[i].question, perLine * 4);
+        const Color stripe = kCategoryColors[std::hash<std::string>{}(items[i].topic) % std::size(kCategoryColors)];
+        if (ui_.card(r, items[i].name, question.c_str(), nullptr, items[i].topic, true, stripe, 1.75f) && belowBars) {
+            if (problemTab_ == 0) {
+                editor_.openProblem(i);
+                screen_ = Screen::Editor;
+            } else {
+                open3D_ = view3d::Launch{view3d::Launch::Mode::Problem, i};
+            }
+            return;
+        }
+    }
+
+    if (maxScroll > 0.0f) {
+        const float top = kTopBar + kTabBar, trackH = H - top - 16.0f, thumbH = std::max(40.0f, trackH * (H - top) / contentH);
+        const float thumbY = top + 8.0f + (trackH - thumbH) * menuScroll_ / maxScroll;
+        gfx_.fillRect({W - 10.0f, top + 8.0f, 4.0f, trackH}, theme::panel);
+        gfx_.fillRect({W - 10.0f, thumbY, 4.0f, thumbH}, theme::border);
+    }
+
+    ui_.panel({0, 0, W, kTopBar});
+    if (ui_.button({12, 10, 100, kTopBar - 20}, "< Back")) {
+        screen_ = Screen::Home;
+        return;
+    }
+    ui_.label(132, (kTopBar - Renderer::textHeight(2.0f)) * 0.5f, "Real-life Problems", theme::text, 2.0f);
+    ui_.label(W - 12.0f - Renderer::textWidth("wheel to scroll   ESC back", 1.25f), (kTopBar - Renderer::textHeight(1.25f)) * 0.5f,
+              maxScroll > 0.0f ? "wheel to scroll   ESC back" : "ESC back", theme::textFaint, 1.25f);
+
+    ui_.panel({0, kTopBar, W, kTabBar}, {24, 27, 35});
+    float x = 12.0f;
+    for (int t = 0; t < 2; ++t) {
+        char name[48];
+        std::snprintf(name, sizeof name, "%s problems  (%zu)", t == 0 ? "2D" : "3D",
+                      t == 0 ? editor::examples().size() : editor3::problems().size());
+        const float w = Renderer::textWidth(name, 1.25f) + 28.0f;
+        if (ui_.button({x, kTopBar + 6, w, kTabBar - 12}, name, problemTab_ == t, 1.25f) && problemTab_ != t) {
+            problemTab_ = t;
+            menuScroll_ = 0.0f;
+        }
+        x += w + 8.0f;
+    }
 }
 
 void App::drawMenu2D() {

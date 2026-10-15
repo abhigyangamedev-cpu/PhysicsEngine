@@ -215,7 +215,7 @@ TEST(JoinedBodiesDontCollide) {
     Body* b = box(w, {0.6f, 0, 0}, {0.5f, 0.5f, 0.5f}); // overlapping
     auto* j = w.createJoint<BallJoint>(a, b, Vec3{0.3f, 0, 0});
     auto touching = [&] {
-        for (const auto& [key, m] : w.manifolds())
+        for (const auto& m : w.manifolds())
             if ((m.a == a && m.b == b) || (m.a == b && m.b == a)) return true;
         return false;
     };
@@ -339,4 +339,46 @@ TEST(NewtonsCradleTransfersThroughRow) {
     CHECK(balls[4]->velocity.x > 0.9f * incoming);
     CHECK(std::abs(balls[0]->velocity.x) < 0.1f);
     for (int i = 1; i < 4; ++i) CHECK(std::abs(balls[i]->velocity.x) < 0.1f);
+}
+
+// a rod hung from a ball joint and kicked hard sideways stops at the cone instead of swinging past it
+TEST(BallJointSwingConeHolds) {
+    World w = quiet();
+    Body* rod = box(w, {0.0f, 4.0f, 0.0f}, {0.05f, 0.5f, 0.05f});
+    auto* j = w.createJoint<BallJoint>(nullptr, rod, Vec3{0, 4.5f, 0});
+    j->limitSwing({0, -1, 0}, 0.5f);
+    rod->angularVelocity = {0, 0, 12.0f};
+    float worst = 0.0f;
+    for (int i = 0; i < 240; ++i) {
+        w.step(kDt);
+        worst = std::max(worst, j->swingAngle());
+    }
+    CHECK(worst < 0.5f + 0.05f);
+    CHECK(worst > 0.45f); // it did reach the stop
+    CHECK((rod->toWorld({0, 0.5f, 0}) - Vec3{0, 4.5f, 0}).length() < 0.01f);
+}
+
+// the stairs ragdolls tumble hard; a head must never sink into its own torso (their parts don't collide)
+TEST(RagdollHeadStaysOutOfTorso) {
+    World w;
+    for (const auto& s : scenes3::all())
+        if (s.name == "Ragdolls on stairs") s.build(w);
+    auto depth = [](const Body& torso, const Body& head) {
+        const Vec3 c = torso.toLocal(head.position), e = torso.shape.halfExtents;
+        const Vec3 q = vmax(-e, vmin(c, e));
+        return head.shape.radius - (c - q).length(); // > 0 overlapping (centre inside counts as radius)
+    };
+    std::vector<std::pair<Body*, Body*>> pairs; // torso, head
+    for (auto& h : w.bodies()) {
+        if (h->isStatic || h->shape.type != ShapeType::Sphere) continue;
+        for (auto& t : w.bodies())
+            if (t->group == h->group && t->shape.type == ShapeType::Box && t->shape.halfExtents.y > 0.21f) pairs.push_back({t.get(), h.get()});
+    }
+    CHECK(pairs.size() == 4);
+    float worst = -1.0f;
+    for (int i = 0; i < 600; ++i) {
+        w.step(kDt);
+        for (auto [t, h] : pairs) worst = std::max(worst, depth(*t, *h));
+    }
+    CHECK(worst < 0.02f);
 }

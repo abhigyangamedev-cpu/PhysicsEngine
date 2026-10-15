@@ -21,10 +21,19 @@ struct Sample {
 };
 
 // Sandbox for building a problem from objects and links, then running it with live readouts.
+// It also presents the real-life problems, with editing locked until one is opened in the editor.
 class Editor {
 public:
     Editor(Renderer& gfx, Ui& ui, Camera& cam);
-    void enter();
+    void enter(); // the sandbox
+    void openProblem(int index);
+    bool inProblem() const { return problemMode_; }
+
+    // read-only views for the UI tests
+    const Scene& scene() const { return scene_; }
+    int problem() const { return example_; }
+    const ExampleRun& problemRun() const { return exampleRun_; }
+    bool playing() const { return started_ && !paused_; }
     void handleEvent(const SDL_Event& e);
     void frame(float dt);
     bool exitRequested() { return std::exchange(exit_, false); }
@@ -50,8 +59,8 @@ private:
     bool showGrid_ = true, showLabels_ = true, showVel_ = true, showAcc_ = false, showForce_ = true;
     bool showTrails_ = false, showGraph_ = true;
     Plot plot_ = Plot::Speed;
-    int panelTab_ = 0; // 0 inspector, 1 standard examples
-    int example_ = -1;
+    int example_ = -1;          // the problem being shown or run, -1 = none
+    bool problemMode_ = false;  // showing example_ as a locked real-life problem
     bool showAnswer_ = false;
     ExampleRun exampleRun_;
 
@@ -103,8 +112,9 @@ private:
     void drawObjectInspector(ObjectSpec& o, float x, float y, float w);
     void drawLinkInspector(LinkSpec& l, float x, float y, float w);
     void drawWorldInspector(float x, float y, float w);
-    void drawExamples(float x, float y, float w);
+    void drawProblemPanel(float x, float y, float w);
     void loadExample(int index);
+    bool locked() const { return started_ || problemMode_; }
     void drawGraph();
     void drawHints();
 };

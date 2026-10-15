@@ -7,7 +7,6 @@
 #include "soft/ParticleSystem.h"
 #include "fluid/FluidSystem.h"
 #include <memory>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -66,12 +65,16 @@ public:
 
     Body* bodyAt(Vec2 point) const;
     const std::vector<std::unique_ptr<Body>>& bodies() const { return bodies_; }
-    const std::unordered_map<uint64_t, Manifold>& manifolds() const { return manifolds_; }
+    const std::vector<Manifold>& manifolds() const { return manifolds_; } // Manifold::key names the pair
     const std::vector<std::unique_ptr<Joint>>& joints() const { return joints_; }
 
 private:
     std::vector<std::unique_ptr<Body>> bodies_;
-    std::unordered_map<uint64_t, Manifold> manifolds_;
+    std::vector<Manifold> manifolds_, nextManifolds_;
+    std::vector<Body*> sorted_; // broadphase order, kept between steps so re-sorting is nearly free
+    bool sortedDirty_ = true;
+    std::vector<uint64_t> slotKeys_; // open-addressing index of manifolds_ by pair key, for warm starting
+    std::vector<int> slotIndex_;
     std::vector<std::unique_ptr<Joint>> joints_;
     std::vector<std::unique_ptr<ForceField>> fields_;
     std::unordered_set<uint64_t> jointPairs_;
@@ -80,6 +83,8 @@ private:
 
     void integrateVelocities(float h);
     void detectContacts();
+    void indexManifolds();
+    const Manifold* findManifold(uint64_t key) const;
     void prepareContacts(float h);
     void solveContacts(bool useBias);
     void solveJoints(bool useBias);

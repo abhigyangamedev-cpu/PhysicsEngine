@@ -1,4 +1,5 @@
 #include "Viewer3.h"
+#include "Editor3.h"
 #include "Overlay3.h"
 #include "Renderer3.h"
 #include "Scenes3.h"
@@ -17,7 +18,7 @@ namespace {
 constexpr float kTopBar = 52.0f, kTabBar = 40.0f, kBottomBar = 46.0f;
 constexpr Color kCategoryColors[] = {{42, 157, 143}, {244, 162, 97}};
 
-enum class Screen { Picker, Scene };
+enum class Screen { Picker, Scene, Editor };
 
 struct Grab {
     MouseJoint* joint = nullptr;
@@ -26,14 +27,25 @@ struct Grab {
 
 class Viewer {
 public:
-    Viewer(SDL_Window* window, Overlay& overlay) : window_(window), overlay_(overlay) {
-        load(8); // Newton's cradle swings behind the scene picker
+    Viewer(SDL_Window* window, Overlay& overlay, Launch launch) : window_(window), overlay_(overlay), editor_(overlay) {
+        if (launch.mode == Launch::Mode::Scenes) {
+            load(8); // Newton's cradle swings behind the scene picker
+            return;
+        }
+        screen_ = Screen::Editor;
+        if (launch.mode == Launch::Mode::Problem) editor_.openProblem(launch.problem);
+        else editor_.openSandbox();
     }
 
     bool running = true;
     Exit exit = Exit::Quit;
 
     void handle(const SDL_Event& e) {
+        if (screen_ == Screen::Editor) {
+            if (e.type == SDL_EVENT_QUIT) running = false, exit = Exit::Quit;
+            else editor_.handle(e);
+            return;
+        }
         switch (e.type) {
         case SDL_EVENT_QUIT: running = false, exit = Exit::Quit; break;
         case SDL_EVENT_KEY_DOWN: key(e.key.key, e.key.mod); break;
@@ -79,6 +91,13 @@ public:
     }
 
     void frame(float dt, Renderer3& renderer, int pixelW, int pixelH) {
+        if (screen_ == Screen::Editor) {
+            int w, h;
+            SDL_GetWindowSize(window_, &w, &h);
+            editor_.frame(dt, renderer, w, h, pixelW, pixelH);
+            if (editor_.exitRequested()) running = false, exit = Exit::Back;
+            return;
+        }
         accumulator_ += std::min(dt, 0.1f);
         int steps = 0;
         while (accumulator_ >= kStep && steps < 4) {
@@ -109,6 +128,7 @@ private:
     static constexpr float kStep = 1.0f / 60.0f;
     SDL_Window* window_;
     Overlay& overlay_;
+    Editor3 editor_;
     World world_;
     Camera cam_;
     Grab grab_;
@@ -352,7 +372,7 @@ private:
 
 } // namespace
 
-Exit run(int width, int height, FrameHook hook) {
+Exit run(int width, int height, Launch launch, FrameHook hook) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
@@ -373,13 +393,14 @@ Exit run(int width, int height, FrameHook hook) {
         return Exit::Back;
     }
     SDL_GL_SetSwapInterval(1);
+    SDL_StartTextInput(window); // the editor's number fields take typed values
 
     Exit result = Exit::Back;
     {
         Renderer3 renderer;
         Overlay overlay;
         if (renderer.init() && overlay.init()) {
-            Viewer viewer(window, overlay);
+            Viewer viewer(window, overlay, launch);
             Uint64 last = SDL_GetPerformanceCounter();
             for (int frame = 0; viewer.running; ++frame) {
                 SDL_Event e;

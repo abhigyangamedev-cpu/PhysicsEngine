@@ -17,6 +17,7 @@ struct ContactPoint {
 };
 
 struct Manifold {
+    uint64_t key = 0; // the body pair, lower id in the high half
     Body* a = nullptr;
     Body* b = nullptr;
     Vec2 normal; // points from a to b

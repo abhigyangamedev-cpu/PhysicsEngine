@@ -1,9 +1,25 @@
 #include "core/World3.h"
 #include <numbers>
+#include <numeric>
 
 namespace pe3 {
 
 namespace {
+
+// Broadphase order puts contacts sharing a body next to each other, and solving them back to back
+// stalls on each other's velocity writes. Visiting them with a golden-ratio stride keeps neighbours
+// apart; the result lands in out.
+void spreadOut(std::vector<Manifold>& in, std::vector<Manifold>& out) {
+    const size_t n = in.size();
+    if (n < 8) {
+        std::swap(in, out);
+        return;
+    }
+    size_t stride = n * 618 / 1000;
+    while (std::gcd(stride, n) != 1) ++stride;
+    out.resize(n);
+    for (size_t i = 0, k = 0; i < n; ++i, k = (k + stride) % n) out[i] = in[k];
+}
 
 uint64_t pairKey(const Body* a, const Body* b) {
     uint32_t i = a->id, j = b->id;
@@ -11,10 +27,13 @@ uint64_t pairKey(const Body* a, const Body* b) {
     return static_cast<uint64_t>(i) << 32 | j;
 }
 
-float effectiveMass(const Body* a, const Body* b, Vec3 rA, Vec3 rB, Vec3 dir) {
-    Vec3 ca = cross(rA, dir), cb = cross(rB, dir);
-    float k = a->invMass + b->invMass + dot(ca, a->invInertiaWorld * ca) + dot(cb, b->invInertiaWorld * cb);
-    return k > 0.0f ? 1.0f / k : 0.0f;
+// impulse lambda along the normal, using the angular responses cached in prepareContacts
+void applyNormal(Body* a, Body* b, const Manifold& m, const ContactPoint& c, float lambda) {
+    const Vec3 p = m.normal * lambda;
+    a->velocity -= p * a->invMass;
+    a->angularVelocity -= c.angA[0] * lambda;
+    b->velocity += p * b->invMass;
+    b->angularVelocity += c.angB[0] * lambda;
 }
 
 Vec3 relativeVelocity(const Body* a, const Body* b, const ContactPoint& c) {
@@ -61,6 +80,7 @@ bool rayBox(Vec3 o, Vec3 d, Vec3 e, float& t, Vec3& n) {
 Body* World::createBody(const Shape& shape, const BodyDef& def) {
     auto body = std::make_unique<Body>(shape, def);
     body->id = nextId_++;
+    sortedDirty_ = true;
     bodies_.push_back(std::move(body));
     return bodies_.back().get();
 }
@@ -77,8 +97,9 @@ void World::destroyBody(Body* body) {
         return true;
     });
     rebuildJointPairs();
-    std::erase_if(manifolds_, [body](const auto& kv) { return kv.second.a == body || kv.second.b == body; });
+    std::erase_if(manifolds_, [body](const Manifold& m) { return m.a == body || m.b == body; });
     std::erase_if(bodies_, [body](const auto& p) { return p.get() == body; });
+    sortedDirty_ = true;
 }
 
 void World::destroyJoint(Joint* joint) {
@@ -102,6 +123,8 @@ void World::clear() {
     manifolds_.clear();
     islands_.clear();
     bodies_.clear();
+    sorted_.clear();
+    sortedDirty_ = true;
 }
 
 RayHit World::raycast(Vec3 origin, Vec3 dir, float maxT) const {
@@ -173,7 +196,7 @@ void World::updateSleep(float dt) {
         return i;
     };
 
-    for (const auto& [key, m] : manifolds_) {
+    for (const Manifold& m : manifolds_) {
         // speculative contacts count too: anything that could wake a body must share its island
         if (m.a->node >= 0 && m.b->node >= 0) parent_[find(m.a->node)] = find(m.b->node);
     }
@@ -186,7 +209,8 @@ void World::updateSleep(float dt) {
         if (j->a->node >= 0 && j->b->node >= 0) parent_[find(j->a->node)] = find(j->b->node);
     }
 
-    std::vector<float> minSleep(n, 1e30f);
+    auto& minSleep = minSleep_;
+    minSleep.assign(n, 1e30f);
     for (auto& b : bodies_) {
         if (b->node < 0) continue;
         const float speed = std::max(b->velocity.length(), b->angularVelocity.length() * b->shape.radius);
@@ -195,7 +219,8 @@ void World::updateSleep(float dt) {
         s = std::min(s, b->sleepTime);
     }
 
-    std::vector<int> islandOf(n, -1);
+    auto& islandOf = islandOf_;
+    islandOf.assign(n, -1);
     for (auto& b : bodies_) {
         if (b->node < 0) continue;
         const int root = find(b->node);
@@ -267,11 +292,41 @@ void World::integrateVelocities(float h) {
     }
 }
 
+void World::indexManifolds() {
+    size_t size = 16;
+    while (size < manifolds_.size() * 2) size *= 2;
+    slotKeys_.assign(size, ~0ull);
+    slotIndex_.resize(size);
+    for (int i = 0; i < static_cast<int>(manifolds_.size()); ++i) {
+        size_t s = (manifolds_[i].key * 0x9E3779B97F4A7C15ull) >> 32 & (size - 1);
+        while (slotKeys_[s] != ~0ull) s = (s + 1) & (size - 1);
+        slotKeys_[s] = manifolds_[i].key;
+        slotIndex_[s] = i;
+    }
+}
+
+const Manifold* World::findManifold(uint64_t key) const {
+    const size_t mask = slotKeys_.size() - 1;
+    for (size_t s = (key * 0x9E3779B97F4A7C15ull) >> 32 & mask; slotKeys_[s] != ~0ull; s = (s + 1) & mask)
+        if (slotKeys_[s] == key) return &manifolds_[slotIndex_[s]];
+    return nullptr;
+}
+
 bool World::detectContacts() {
+    // bodies barely move between substeps, so insertion sort on last order is close to linear
     auto& sorted = sorted_;
-    sorted.clear();
-    for (auto& b : bodies_) sorted.push_back(b.get());
-    std::sort(sorted.begin(), sorted.end(), [](Body* a, Body* b) { return a->aabb.min.x < b->aabb.min.x; });
+    if (sortedDirty_) {
+        sorted.clear();
+        for (auto& b : bodies_) sorted.push_back(b.get());
+        sortedDirty_ = false;
+    }
+    for (size_t i = 1; i < sorted.size(); ++i) {
+        Body* b = sorted[i];
+        size_t j = i;
+        for (; j > 0 && sorted[j - 1]->aabb.min.x > b->aabb.min.x; --j) sorted[j] = sorted[j - 1];
+        sorted[j] = b;
+    }
+    indexManifolds();
     bool woke = false;
 
     const float margin = settings.speculativeDistance;
@@ -282,32 +337,37 @@ bool World::detectContacts() {
     for (size_t i = 0; i < sorted.size(); ++i) {
         Body* a = sorted[i];
         const Aabb box{a->aabb.min - pad, a->aabb.max + pad};
+        const bool activeA = !a->isStatic && a->awake;
         for (size_t j = i + 1; j < sorted.size(); ++j) {
             Body* b = sorted[j];
             if (b->aabb.min.x > box.max.x) break;
-            const bool activeA = !a->isStatic && a->awake, activeB = !b->isStatic && b->awake;
+            const bool activeB = !b->isStatic && b->awake;
             if (!activeA && !activeB) continue;
             if (a->group != 0 && a->group == b->group) continue;
             if (!box.overlaps(b->aabb)) continue;
-            if (!jointPairs_.empty() && jointPairs_.contains(pairKey(a, b))) continue;
+            const uint64_t key = pairKey(a, b);
+            if (!jointPairs_.empty() && jointPairs_.contains(key)) continue;
 
             Body* first = a->id < b->id ? a : b;
             Body* second = first == a ? b : a;
-            Manifold m;
-            if (!collide(first, second, margin, m)) continue;
+            Manifold& m = next.emplace_back();
+            if (!collide(first, second, margin, m)) {
+                next.pop_back();
+                continue;
+            }
+            m.key = key;
             if (!a->isStatic && !a->awake) wake(a), woke = true;
             if (!b->isStatic && !b->awake) wake(b), woke = true;
 
-            const uint64_t key = pairKey(a, b);
-            if (auto old = manifolds_.find(key); old != manifolds_.end()) {
+            if (const Manifold* old = findManifold(key)) {
                 for (int k = 0; k < m.count; ++k) {
                     auto& c = m.contacts[k];
-                    for (int o = 0; o < old->second.count; ++o) {
-                        const auto& oc = old->second.contacts[o];
+                    for (int o = 0; o < old->count; ++o) {
+                        const auto& oc = old->contacts[o];
                         if ((oc.localA - c.localA).lengthSq() < 0.05f * 0.05f) {
                             c.normalImpulse = oc.normalImpulse;
                             // re-project friction into the new tangent basis
-                            Vec3 ft = old->second.tangent[0] * oc.tangentImpulse[0] + old->second.tangent[1] * oc.tangentImpulse[1];
+                            Vec3 ft = old->tangent[0] * oc.tangentImpulse[0] + old->tangent[1] * oc.tangentImpulse[1];
                             c.tangentImpulse[0] = dot(ft, m.tangent[0]);
                             c.tangentImpulse[1] = dot(ft, m.tangent[1]);
                             break;
@@ -321,10 +381,9 @@ bool World::detectContacts() {
                     if (s->shape.type == ShapeType::Sphere) r = std::min(r, s->shape.radius);
                 m.rollingRadius = r * std::max(first->rollingResistance, second->rollingResistance);
             }
-            next.emplace(key, m);
         }
     }
-    std::swap(manifolds_, next);
+    spreadOut(next, manifolds_);
     return woke;
 }
 
@@ -339,7 +398,7 @@ void World::prepareContacts(float h) {
     impulseScale_ = 1.0f / (1.0f + a2);
     invH_ = 1.0f / h;
 
-    for (auto& [key, m] : manifolds_) {
+    for (Manifold& m : manifolds_) {
         Body* a = m.a;
         Body* b = m.b;
         if (m.rollingRadius > 0.0f) {
@@ -347,31 +406,40 @@ void World::prepareContacts(float h) {
             const float k = (trace(a->invInertiaWorld) + trace(b->invInertiaWorld)) / 3.0f;
             m.rollingMass = k > 0.0f ? 1.0f / k : 0.0f;
         }
+        const Vec3 dirs[3] = {m.normal, m.tangent[0], m.tangent[1]};
         for (int i = 0; i < m.count; ++i) {
             auto& c = m.contacts[i];
             c.rA = c.point - a->position;
             c.rB = c.point - b->position;
-            c.normalMass = effectiveMass(a, b, c.rA, c.rB, m.normal);
-            c.tangentMass[0] = effectiveMass(a, b, c.rA, c.rB, m.tangent[0]);
-            c.tangentMass[1] = effectiveMass(a, b, c.rA, c.rB, m.tangent[1]);
+            float* masses[3] = {&c.normalMass, &c.tangentMass[0], &c.tangentMass[1]};
+            for (int k = 0; k < 3; ++k) {
+                const Vec3 ca = cross(c.rA, dirs[k]), cb = cross(c.rB, dirs[k]);
+                c.angA[k] = a->invInertiaWorld * ca;
+                c.angB[k] = b->invInertiaWorld * cb;
+                const float invK = a->invMass + b->invMass + dot(ca, c.angA[k]) + dot(cb, c.angB[k]);
+                *masses[k] = invK > 0.0f ? 1.0f / invK : 0.0f;
+            }
             c.relativeVelocity = dot(relativeVelocity(a, b, c), m.normal);
         }
     }
 
     // separate pass: approach speeds above must not see other contacts' warm-start impulses,
     // or restitution mistakes a loaded resting contact for an impact
-    for (auto& [key, m] : manifolds_) {
+    for (Manifold& m : manifolds_) {
         for (int i = 0; i < m.count; ++i) {
             const auto& c = m.contacts[i];
-            Vec3 p = m.normal * c.normalImpulse + m.tangent[0] * c.tangentImpulse[0] + m.tangent[1] * c.tangentImpulse[1];
-            m.a->applyImpulse(-p, c.rA);
-            m.b->applyImpulse(p, c.rB);
+            const float n = c.normalImpulse, t0 = c.tangentImpulse[0], t1 = c.tangentImpulse[1];
+            const Vec3 p = m.normal * n + m.tangent[0] * t0 + m.tangent[1] * t1;
+            m.a->velocity -= p * m.a->invMass;
+            m.a->angularVelocity -= c.angA[0] * n + c.angA[1] * t0 + c.angA[2] * t1;
+            m.b->velocity += p * m.b->invMass;
+            m.b->angularVelocity += c.angB[0] * n + c.angB[1] * t0 + c.angB[2] * t1;
         }
     }
 }
 
 void World::solveContacts(bool useBias) {
-    for (auto& [key, m] : manifolds_) {
+    for (Manifold& m : manifolds_) {
         Body* a = m.a;
         Body* b = m.b;
         const float mu = std::sqrt(a->friction * b->friction);
@@ -405,9 +473,12 @@ void World::solveContacts(bool useBias) {
             }
             c.tangentImpulse[0] = t0;
             c.tangentImpulse[1] = t1;
-            Vec3 p = m.tangent[0] * (t0 - old0) + m.tangent[1] * (t1 - old1);
-            a->applyImpulse(-p, c.rA);
-            b->applyImpulse(p, c.rB);
+            const float d0 = t0 - old0, d1 = t1 - old1;
+            Vec3 p = m.tangent[0] * d0 + m.tangent[1] * d1;
+            a->velocity -= p * a->invMass;
+            a->angularVelocity -= c.angA[1] * d0 + c.angA[2] * d1;
+            b->velocity += p * b->invMass;
+            b->angularVelocity += c.angB[1] * d0 + c.angB[2] * d1;
 
             dv = relativeVelocity(a, b, c);
             const float vn = dot(dv, m.normal);
@@ -423,16 +494,14 @@ void World::solveContacts(bool useBias) {
                 lambda = -c.normalMass * vn;
             }
             c.normalImpulse = std::max(old + lambda, 0.0f);
-            p = m.normal * (c.normalImpulse - old);
-            a->applyImpulse(-p, c.rA);
-            b->applyImpulse(p, c.rB);
+            applyNormal(a, b, m, c, c.normalImpulse - old);
         }
     }
 }
 
 void World::applyRestitution() {
     for (int pass = 0; pass < 4; ++pass) {
-        for (auto& [key, m] : manifolds_) {
+        for (Manifold& m : manifolds_) {
             Body* a = m.a;
             Body* b = m.b;
             const float e = std::max(a->restitution, b->restitution);
@@ -443,9 +512,7 @@ void World::applyRestitution() {
                 float vn = dot(relativeVelocity(a, b, c), m.normal);
                 float old = c.normalImpulse;
                 c.normalImpulse = std::max(old - c.normalMass * (vn + e * c.relativeVelocity), 0.0f);
-                Vec3 p = m.normal * (c.normalImpulse - old);
-                a->applyImpulse(-p, c.rA);
-                b->applyImpulse(p, c.rB);
+                applyNormal(a, b, m, c, c.normalImpulse - old);
             }
         }
     }

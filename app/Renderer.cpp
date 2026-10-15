@@ -26,23 +26,22 @@ void Renderer::polygon(std::span<const Vec2> pts, Color fill, Color outline) {
     const int n = static_cast<int>(pts.size());
     if (n < 3) return;
 
-    std::vector<SDL_Vertex> verts(n);
-    std::vector<SDL_FPoint> loop(n + 1);
+    polyVerts_.resize(n);
+    polyLoop_.resize(n + 1);
     const SDL_FColor fc = toF(fill);
     for (int i = 0; i < n; ++i) {
         Vec2 s = cam_.toScreen(pts[i]);
-        verts[i] = {{s.x, s.y}, fc, {0.0f, 0.0f}};
-        loop[i] = {s.x, s.y};
+        polyVerts_[i] = {{s.x, s.y}, fc, {0.0f, 0.0f}};
+        polyLoop_[i] = {s.x, s.y};
     }
-    loop[n] = loop[0];
+    polyLoop_[n] = polyLoop_[0];
 
-    std::vector<int> indices;
-    indices.reserve((n - 2) * 3);
-    for (int i = 1; i < n - 1; ++i) indices.insert(indices.end(), {0, i, i + 1});
+    polyIndices_.clear();
+    for (int i = 1; i < n - 1; ++i) polyIndices_.insert(polyIndices_.end(), {0, i, i + 1});
 
-    SDL_RenderGeometry(sdl_, nullptr, verts.data(), n, indices.data(), static_cast<int>(indices.size()));
+    SDL_RenderGeometry(sdl_, nullptr, polyVerts_.data(), n, polyIndices_.data(), static_cast<int>(polyIndices_.size()));
     SDL_SetRenderDrawColor(sdl_, outline.r, outline.g, outline.b, outline.a);
-    SDL_RenderLines(sdl_, loop.data(), n + 1);
+    SDL_RenderLines(sdl_, polyLoop_.data(), n + 1);
 }
 
 void Renderer::circle(Vec2 center, float radius, float angle, Color fill, Color outline) {

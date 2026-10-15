@@ -60,16 +60,68 @@ void Joint::applyAngular(Vec3 impulse) {
 
 BallJoint::BallJoint(Body* a, Body* b, Vec3 anchor) : Joint(a, b) { setAnchors(anchor, anchor); }
 
+void BallJoint::limitSwing(Vec3 worldAxis, float angle) {
+    const Vec3 u = worldAxis.normalized();
+    coneA_ = a->rotation.mulT(u);
+    coneB_ = b->rotation.mulT(u);
+    coneAngle = angle;
+    enableCone = true;
+}
+
+float BallJoint::swingAngle() const {
+    return std::acos(std::clamp(dot(a->rotation * coneA_, b->rotation * coneB_), -1.0f, 1.0f));
+}
+
 void BallJoint::prepare(float h) {
     computeArms();
+    invH_ = 1.0f / h;
     error_ = b->position + rB_ - a->position - rA_;
     k_ = pointMass();
     soft_ = Softness::make(stiffness(h), kDampingRatio, h);
     kAng_ = a->invInertiaWorld + b->invInertiaWorld;
     maxFrictionImpulse_ = maxFrictionTorque * h;
     if (maxFrictionTorque <= 0.0f) frictionImpulse_ = {};
+
+    if (enableCone) {
+        // swinging b about n = uA x uB opens the angle between the two directions
+        const Vec3 uA = a->rotation * coneA_, uB = b->rotation * coneB_;
+        swing_ = std::acos(std::clamp(dot(uA, uB), -1.0f, 1.0f));
+        Vec3 n = cross(uA, uB);
+        if (n.lengthSq() < 1e-10f) {
+            Vec3 t;
+            basis(uA, n, t); // aligned (or exactly opposite): any perpendicular axis will do
+        }
+        coneAxis_ = n.normalized();
+        coneMass_ = inverseOrZero(dot(coneAxis_, kAng_ * coneAxis_));
+        // Pinned to something fixed, a body far from its pivot (a bob on a stick) mostly resists swinging
+        // through m r^2 about the pivot, not its own small inertia: a turn about its centre alone would be
+        // undone by the point constraint and the limit would give way. Turn it about the pivot instead.
+        pivotTurn_ = a->isStatic != b->isStatic;
+        if (pivotTurn_) {
+            const Body* m = a->isStatic ? b : a;
+            const Vec3 r = a->isStatic ? rB_ : rA_;
+            pivotInertia_ = inverseOrZero(dot(coneAxis_, m->invInertiaWorld * coneAxis_)) + m->mass * cross(coneAxis_, r).lengthSq();
+            coneMass_ = pivotInertia_;
+        }
+    } else {
+        coneImpulse_ = 0.0f;
+    }
+
     applyLinear(impulse_);
     applyAngular(frictionImpulse_);
+    applyCone(-coneImpulse_);
+}
+
+void BallJoint::applyCone(float impulse) {
+    if (!pivotTurn_) {
+        applyAngular(coneAxis_ * impulse);
+        return;
+    }
+    Body* m = a->isStatic ? b : a;
+    const Vec3 r = a->isStatic ? rB_ : rA_;
+    const Vec3 dw = coneAxis_ * ((a->isStatic ? impulse : -impulse) / pivotInertia_);
+    m->angularVelocity += dw;
+    m->velocity += cross(dw, -r); // the centre swings round the pivot, so the anchor itself doesn't move
 }
 
 void BallJoint::solve(bool useBias) {
@@ -78,6 +130,23 @@ void BallJoint::solve(bool useBias) {
         frictionImpulse_ += -kAng_.solve(b->angularVelocity - a->angularVelocity);
         if (const float len = frictionImpulse_.length(); len > maxFrictionImpulse_) frictionImpulse_ *= maxFrictionImpulse_ / len;
         applyAngular(frictionImpulse_ - old);
+    }
+    if (enableCone) {
+        // same one-sided limit as the hinge's: C = cone - swing must stay >= 0
+        const float C = coneAngle - swing_;
+        const float cdot = -dot(b->angularVelocity - a->angularVelocity, coneAxis_);
+        float bias = 0.0f, massScale = 1.0f, impulseScale = 0.0f;
+        if (C > 0.0f) {
+            bias = C * invH_;
+        } else if (useBias) {
+            bias = soft_.biasRate * C;
+            massScale = soft_.massScale;
+            impulseScale = soft_.impulseScale;
+        }
+        const float lambda = -coneMass_ * massScale * (cdot + bias) - impulseScale * coneImpulse_;
+        const float next = std::max(coneImpulse_ + lambda, 0.0f);
+        applyCone(-(next - coneImpulse_));
+        coneImpulse_ = next;
     }
     const Vec3 cdot = pointVelocityError();
     Vec3 lambda = useBias ? k_.solve(cdot + error_ * soft_.biasRate) * -soft_.massScale - impulse_ * soft_.impulseScale

@@ -1,5 +1,6 @@
 #include "App.h"
 #include "Viewer3.h"
+#include <optional>
 
 int main() {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -8,6 +9,7 @@ int main() {
     }
 
     int width = 1280, height = 760;
+    std::optional<view3d::Launch> resume; // what the 3D window last opened, to come back to the screen that asked
     bool quit = false;
     while (!quit) {
         SDL_Window* window = nullptr;
@@ -22,11 +24,12 @@ int main() {
 
         int w = 0, h = 0;
         SDL_GetRenderOutputSize(sdl, &w, &h);
-        bool open3D = false;
+        std::optional<view3d::Launch> launch;
         {
             App app(sdl, w, h);
+            if (resume) app.resumeAfter3D(*resume);
             Uint64 last = SDL_GetPerformanceCounter();
-            while (app.running() && !open3D) {
+            while (app.running() && !launch) {
                 SDL_Event e;
                 while (SDL_PollEvent(&e)) app.handleEvent(e);
 
@@ -36,15 +39,16 @@ int main() {
 
                 app.frame(dt);
                 SDL_RenderPresent(sdl);
-                open3D = app.take3DRequest();
+                launch = app.take3DRequest();
             }
         }
         SDL_GetWindowSize(window, &width, &height);
         SDL_DestroyRenderer(sdl);
         SDL_DestroyWindow(window);
 
-        // the 3D viewer needs an OpenGL window, so it runs in its own and hands back on ESC
-        quit = !open3D || view3d::run(width, height) == view3d::Exit::Quit;
+        // the 3D views need an OpenGL window, so they run in their own and hand back on ESC
+        quit = !launch || view3d::run(width, height, *launch) == view3d::Exit::Quit;
+        resume = launch;
     }
 
     SDL_Quit();
