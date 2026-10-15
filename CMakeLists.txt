@@ -7,6 +7,12 @@ if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif ()
 
+option(PE_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+if (PE_SANITIZE)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address,undefined)
+endif ()
+
 add_library(physics STATIC
         engine/rigid/Shape.cpp
         engine/rigid/Body.cpp
@@ -74,10 +80,19 @@ add_executable(editor_tests
         tests/OscillationTests.cpp
         tests/CollisionFieldTests.cpp
         tests/ExampleTests.cpp
+        tests/StressTests.cpp
         app/Expr.cpp
         app/editor/EditorScene.cpp
         app/editor/Simulation.cpp
         app/editor/Examples.cpp
+        app/Scenes.cpp
+        app/scenes/Machines.cpp
+        app/scenes/Oscillations.cpp
+        app/scenes/Collisions.cpp
+        app/scenes/Projectiles.cpp
+        app/scenes/Rotation.cpp
+        app/scenes/Thermo.cpp
+        app/scenes/Optics.cpp
 )
 target_include_directories(editor_tests PRIVATE app tests)
 target_link_libraries(editor_tests PRIVATE physics)

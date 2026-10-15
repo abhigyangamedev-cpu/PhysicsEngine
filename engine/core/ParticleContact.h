@@ -52,7 +52,7 @@ inline bool particleContact(const Body& b, Vec2 p, float r, ParticleContact& out
     }
     if (bestSq >= r * r) return false;
     float dist = std::sqrt(bestSq);
-    out.normal = (p - closest) / dist;
+    out.normal = dist > 1e-6f ? (p - closest) / dist : n[face]; // exactly on an edge
     out.depth = r - dist;
     out.point = closest;
     return true;

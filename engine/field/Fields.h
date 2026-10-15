@@ -76,6 +76,7 @@ public:
     Vec2 endA(const Spring& s) const;
     Vec2 endB(const Spring& s) const;
     void apply(World& world, float h) override;
+    void removeBody(const Body* body) override;
 };
 
 float orbitalSpeed(float G, float centralMass, float radius);

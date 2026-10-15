@@ -1,5 +1,6 @@
 #include "rigid/Body.h"
 #include <algorithm>
+#include <cmath>
 
 namespace pe {
 
@@ -14,10 +15,11 @@ Body::Body(const Shape& s, const BodyDef& def)
         angularVelocity = 0.0f;
     } else {
         MassData md = shape.computeMass(def.density);
-        mass = md.mass;
-        inertia = md.inertia;
+        // a zero-size or zero-density body still needs a finite mass; with no inertia it just can't spin
+        mass = md.mass > 0.0f && std::isfinite(md.mass) ? md.mass : 1.0f;
+        inertia = md.inertia > 0.0f && std::isfinite(md.inertia) ? md.inertia : 0.0f;
         invMass = 1.0f / mass;
-        invInertia = 1.0f / inertia;
+        invInertia = inertia > 0.0f ? 1.0f / inertia : 0.0f;
     }
     worldVertices.resize(shape.vertices.size());
     worldNormals.resize(shape.normals.size());

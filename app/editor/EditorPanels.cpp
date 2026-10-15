@@ -226,9 +226,7 @@ void Editor::drawObjectInspector(ObjectSpec& o, float x, float y, float w) {
     }
     r.two("Friction u, e", id + 14, o.friction, o.restitution, 0.05f);
     if (r.changed) {
-        o.mass = std::max(o.mass, 1e-3f);
-        o.friction = std::max(o.friction, 0.0f);
-        o.restitution = std::clamp(o.restitution, 0.0f, 1.0f);
+        o.sanitize();
         dirty_ = true;
     }
 
@@ -293,9 +291,7 @@ void Editor::drawLinkInspector(LinkSpec& l, float x, float y, float w) {
     case LinkKind::Hinge: r.note("Pins the object so it can only rotate about this point."); break;
     }
     if (r.changed) {
-        l.k = std::max(l.k, 0.0f);
-        l.ratio = std::max(l.ratio, 0.1f);
-        l.wheelRadius = std::max(l.wheelRadius, 0.02f);
+        l.sanitize();
         dirty_ = true;
     }
     if (!started_) {
@@ -344,9 +340,7 @@ void Editor::drawWorldInspector(float x, float y, float w) {
     if (ws.coulomb) r.one("Coulomb k", id + 7, ws.coulombK, 0.0f);
     if (ws.mutualGravity) r.one("Gravitation G", id + 8, ws.G, 0.1f);
     if (r.changed) {
-        ws.timeScale = std::clamp(ws.timeScale, 0.01f, 10.0f);
-        ws.stopAt = std::max(ws.stopAt, 0.0f);
-        ws.drag = std::max(ws.drag, 0.0f);
+        ws.sanitize();
         if (!started_) dirty_ = true;
     }
 

@@ -31,6 +31,7 @@ struct ObjectSpec {
     bool holdVelocity = false; // a drive keeps the speed along the initial velocity, measuring the force it takes
 
     pe::Shape shape() const;
+    void sanitize(); // clamps values into the ranges the inspector allows
 };
 
 enum class LinkKind { Spring, Rod, Rope, Hinge, Pulley };
@@ -49,6 +50,8 @@ struct LinkSpec {
     float length = -1.0f; // natural length of a spring / length of a rod or rope; < 0 uses the initial distance
     Vec2 wheel;
     float wheelRadius = 0.3f, ratio = 1.0f;
+
+    void sanitize();
 };
 
 struct WorldSpec {
@@ -62,6 +65,8 @@ struct WorldSpec {
     float coulombK = 8.99e9f;
     bool mutualGravity = false;
     float G = 1.0f;
+
+    void sanitize();
 };
 
 struct Scene {
@@ -76,6 +81,7 @@ struct Scene {
     void removeObject(int id);
     void removeLink(int id);
     std::string nextName() const;
+    void sanitize();
 
     Vec2 endpointWorld(const Endpoint& e) const;
     Endpoint endpointAt(int obj, Vec2 world) const;

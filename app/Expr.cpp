@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <numbers>
+#include <string>
 
 namespace {
 
@@ -38,10 +39,18 @@ struct Parser {
             else return v;
         }
     }
+    // every recursive path passes through here; cap it so pasted junk can't overflow the stack
+    int depth = 0;
     double unary() {
-        if (eat('-')) return -unary();
-        if (eat('+')) return unary();
-        return power();
+        if (depth >= 256) {
+            ok = false;
+            s += std::char_traits<char>::length(s);
+            return 0.0;
+        }
+        ++depth;
+        double v = eat('-') ? -unary() : eat('+') ? unary() : power();
+        --depth;
+        return v;
     }
     double power() {
         double v = primary();
