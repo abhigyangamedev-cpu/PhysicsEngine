@@ -1,4 +1,5 @@
 #include "App.h"
+#include "WorldDraw.h"
 #include <algorithm>
 #include <cstdio>
 #include <string>
@@ -16,125 +17,6 @@ constexpr Color kCategoryColors[] = {
     {231, 111, 81}, {244, 162, 97}, {42, 157, 143}, {94, 129, 172}, {180, 142, 173}, {72, 170, 220}, {214, 160, 72},
     {120, 190, 110}, {225, 95, 130}, {150, 120, 220}, {90, 190, 190}, {230, 130, 60}, {200, 200, 120},
 };
-
-Color rgba(uint32_t c) { return {Uint8(c >> 24), Uint8(c >> 16), Uint8(c >> 8), Uint8(c)}; }
-
-Color bodyColor(const Body& b) {
-    if (b.color) return rgba(b.color);
-    if (b.charge > 0.0f) return {235, 87, 87};
-    if (b.charge < 0.0f) return {72, 149, 239};
-    if (b.isStatic) return {70, 75, 85};
-    if (b.mass > 500.0f) return {255, 200, 87};
-    static constexpr Color palette[] = {
-        {231, 111, 81}, {244, 162, 97}, {233, 196, 106}, {42, 157, 143}, {94, 129, 172}, {180, 142, 173},
-    };
-    return palette[b.id % std::size(palette)];
-}
-
-Color darker(Color c) { return {Uint8(c.r * 0.6f), Uint8(c.g * 0.6f), Uint8(c.b * 0.6f), c.a}; }
-
-// Zigzag spring between two points; the coil count stays fixed so stretching is visible.
-void drawCoil(Renderer& gfx, Vec2 a, Vec2 b, Color c) {
-    Vec2 d = b - a;
-    float len = d.length();
-    if (len < 1e-4f) return;
-    Vec2 u = d / len, n = u.perp() * 0.18f;
-    constexpr int kTurns = 12;
-    const float lead = std::min(0.2f, 0.15f * len);
-    Vec2 prev = a + u * lead;
-    gfx.line(a, prev, c);
-    for (int i = 1; i <= kTurns * 2; ++i) {
-        float t = lead + (len - 2.0f * lead) * i / (kTurns * 2);
-        Vec2 p = a + u * t + (i == kTurns * 2 ? Vec2{} : (i % 2 ? n : -n));
-        gfx.line(prev, p, c);
-        prev = p;
-    }
-    gfx.line(prev, b, c);
-}
-
-void drawWorld(Renderer& gfx, const World& world, bool showContacts) {
-    const auto& ps = world.particles;
-    for (const auto& pc : ps.pressures) {
-        thread_local std::vector<Vec2> ring;
-        ring.clear();
-        for (uint32_t i : pc.ring) ring.push_back(ps.particles[i].position);
-        gfx.polygon(ring, {94, 200, 172, 200}, {40, 120, 100});
-    }
-
-    for (const auto& b : world.bodies()) {
-        Color c = bodyColor(*b);
-        if (b->shape.type == ShapeType::Circle)
-            gfx.circle(b->position, b->shape.radius, b->angle, c, darker(c));
-        else
-            gfx.polygon(b->worldVertices, c, darker(c));
-    }
-
-    const auto& fl = world.fluid;
-    const float fr = fl.particleRadius() * 1.6f;
-    for (size_t i = 0; i < fl.size(); ++i) {
-        uint32_t base = fl.color[i] ? fl.color[i] : 0x2f7fd6ff;
-        float t = std::min(fl.velocity[i].length() / 7.0f, 1.0f);
-        auto mix = [t](uint32_t c, int shift, float target) {
-            return Uint8(((c >> shift) & 0xff) * (1.0f - t) + target * t);
-        };
-        gfx.discBatchAdd(fl.position[i], fr, {mix(base, 24, 200), mix(base, 16, 235), mix(base, 8, 255), 190});
-    }
-    gfx.discBatchFlush();
-
-    for (const auto& l : ps.links)
-        if (!l.broken) gfx.line(ps.particles[l.a].position, ps.particles[l.b].position, {170, 190, 230, 160});
-    for (const auto& p : ps.particles) {
-        Color c = p.invMass == 0.0f ? Color{255, 80, 80} : Color{220, 230, 255};
-        if (p.color) c = {Uint8(p.color >> 24), Uint8(p.color >> 16), Uint8(p.color >> 8), Uint8(p.color)};
-        gfx.point(p.position, p.color ? 2.0f : 3.0f, c);
-    }
-    for (const auto& a : ps.attachments)
-        gfx.line(ps.particles[a.particle].position, a.body->position + a.body->rot.apply(a.localAnchor), {255, 200, 80});
-
-    for (const auto& f : world.fields()) {
-        auto* sf = dynamic_cast<const SpringField*>(f.get());
-        if (!sf) continue;
-        for (const auto& s : sf->springs) {
-            if (s.coil)
-                drawCoil(gfx, sf->endA(s), sf->endB(s), s.pushOnly ? Color{120, 200, 255} : Color{250, 210, 80});
-            else
-                gfx.line(sf->endA(s), sf->endB(s), {220, 220, 230});
-        }
-    }
-
-    for (const auto& j : world.joints()) {
-        Color c{230, 230, 230};
-        if (dynamic_cast<const GearJoint*>(j.get())) continue; // the gears themselves show it
-        if (auto* p = dynamic_cast<const PulleyJoint*>(j.get())) {
-            const Color rope{200, 150, 90};
-            gfx.line(p->groundA, p->anchorA(), rope);
-            // a block and tackle hangs body b from `ratio` parallel strands
-            const int strands = std::max(1, static_cast<int>(std::lround(p->ratio)));
-            const float spread = p->b->shape.type == ShapeType::Circle ? p->b->shape.radius * 0.8f : 0.3f;
-            for (int k = 0; k < strands; ++k) {
-                float off = strands == 1 ? 0.0f : spread * (2.0f * k / (strands - 1) - 1.0f);
-                gfx.line(p->groundB + Vec2{off, 0.0f}, p->anchorB() + Vec2{off, 0.0f}, rope);
-            }
-            continue;
-        }
-        if (auto* d = dynamic_cast<const DistanceJoint*>(j.get())) {
-            if (d->rope) c = {200, 150, 90};
-            else if (d->hertz > 0.0f) c = {250, 210, 80};
-        }
-        gfx.line(j->anchorA(), j->anchorB(), c);
-        gfx.point(j->anchorA(), 4.0f, c);
-        gfx.point(j->anchorB(), 4.0f, c);
-    }
-
-    if (showContacts) {
-        for (const auto& [key, m] : world.manifolds()) {
-            for (int i = 0; i < m.count; ++i) {
-                gfx.point(m.contacts[i].point, 5.0f, {255, 60, 60});
-                gfx.line(m.contacts[i].point, m.contacts[i].point + m.normal * 0.3f, {255, 255, 255});
-            }
-        }
-    }
-}
 
 } // namespace
 
@@ -171,7 +53,7 @@ void Grab::end(World& w) {
     particle = -1;
 }
 
-App::App(SDL_Renderer* sdl, int width, int height) : gfx_(sdl, cam_), ui_(gfx_) {
+App::App(SDL_Renderer* sdl, int width, int height) : gfx_(sdl, cam_), ui_(gfx_), editor_(gfx_, ui_, cam_) {
     cam_.width = width;
     cam_.height = height;
     resetBackdrop();
@@ -211,6 +93,25 @@ void App::openCategory(int category) {
 }
 
 void App::handleEvent(const SDL_Event& e) {
+    if (e.type == SDL_EVENT_TEXT_INPUT) ui_.textInput(e.text.text);
+    if (e.type == SDL_EVENT_KEY_DOWN && ui_.editing()) {
+        ui_.keyDown(e.key.key);
+        return;
+    }
+    if (screen_ == Screen::Editor) {
+        if (e.type == SDL_EVENT_MOUSE_MOTION) mouse_ = {e.motion.x, e.motion.y};
+        if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+            mouse_ = {e.button.x, e.button.y};
+            if (e.button.button == SDL_BUTTON_LEFT) leftPressed_ = true;
+        }
+        if (e.type == SDL_EVENT_QUIT) running_ = false;
+        if (e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+            cam_.width = e.window.data1;
+            cam_.height = e.window.data2;
+        }
+        editor_.handleEvent(e);
+        return;
+    }
     switch (e.type) {
     case SDL_EVENT_QUIT: running_ = false; break;
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
@@ -318,6 +219,10 @@ void App::frame(float dt) {
         drawSimulation();
         if (screen_ == Screen::Simulation && !ui_.overUi()) handleWorldClicks();
         break;
+    case Screen::Editor:
+        editor_.frame(dt);
+        if (editor_.exitRequested()) screen_ = Screen::Home;
+        break;
     }
     leftPressed_ = rightPressed_ = middlePressed_ = false;
 }
@@ -359,16 +264,21 @@ void App::drawHome() {
     ui_.labelCentered(W * 0.5f, H * 0.14f + 58.0f, "Classical mechanics, simulated from scratch", theme::textDim, 1.75f);
     ui_.labelCentered(W * 0.5f, H * 0.36f, "Choose a simulation space", theme::text, 2.0f);
 
-    const float gap = 32.0f;
-    const float cw = std::min(420.0f, (W - 3.0f * gap) * 0.5f), ch = 220.0f;
-    const float x0 = W * 0.5f - cw - gap * 0.5f, y = H * 0.36f + 44.0f;
+    const float gap = 28.0f;
+    const float cw = std::min(380.0f, (W - 4.0f * gap) / 3.0f), ch = 220.0f;
+    const float x0 = W * 0.5f - cw * 1.5f - gap, y = H * 0.36f + 44.0f;
 
     char badge[32];
     std::snprintf(badge, sizeof badge, "%zu scenes", scenes().size());
     if (ui_.card({x0, y, cw, ch}, "2D", "Classical mechanics, waves, heat, fields, fluids and light",
                  "Rigid and soft bodies, machines, orbits, gases and optics", badge, true, theme::accent, 6.0f))
         screen_ = Screen::Menu2D;
-    ui_.card({x0 + cw + gap, y, cw, ch}, "3D", "Rigid bodies and constraints in three dimensions",
+    if (ui_.card({x0 + cw + gap, y, cw, ch}, "Editor", "Build any problem: set masses, velocities, forces and fields",
+                 "Blocks, balls, wedges, springs, rods, ropes, hinges and pulleys", "Sandbox", true, {244, 162, 97}, 6.0f)) {
+        editor_.enter();
+        screen_ = Screen::Editor;
+    }
+    ui_.card({x0 + 2.0f * (cw + gap), y, cw, ch}, "3D", "Rigid bodies and constraints in three dimensions",
              "Planned once the 2D engine is complete", "Coming soon", false, theme::accent, 6.0f);
 
     ui_.labelCentered(W * 0.5f, H - 40.0f, "ESC to quit", theme::textFaint, 1.25f);

@@ -1,5 +1,6 @@
 #pragma once
 #include "Renderer.h"
+#include <string>
 
 namespace theme {
 inline constexpr Color background{18, 20, 26};
@@ -22,6 +23,7 @@ public:
     void begin(float mouseX, float mouseY, bool clicked);
     bool hovered(SDL_FRect r) const;
     bool overUi() const { return overUi_; }
+    void scroll(float wheel) { pendingWheel_ += wheel; }
 
     bool button(SDL_FRect r, const char* label, bool active = false, float scale = 1.5f);
     // Large selectable card with title, subtitle and optional badge; disabled cards are dimmed.
@@ -31,6 +33,13 @@ public:
     void panel(SDL_FRect r, Color c = theme::panel);
     void label(float x, float y, const char* str, Color c = theme::text, float scale = 1.5f);
     void labelCentered(float cx, float y, const char* str, Color c = theme::text, float scale = 1.5f);
+    // Click to type a value (see Expr.h); Enter or clicking away commits, Esc cancels, the wheel
+    // nudges by step. Returns true on the frame the value changes. id must be unique and nonzero.
+    bool numberField(SDL_FRect r, int id, float& value, float step = 0.0f, bool enabled = true);
+    bool editing() const { return editId_ != 0; }
+    void textInput(const char* utf8);
+    void keyDown(SDL_Keycode key);
+
     // Word-wraps to maxWidth; returns the height used.
     float paragraph(float x, float y, float maxWidth, const char* str, Color c, float scale, float lineGap = 6.0f);
 
@@ -39,4 +48,9 @@ private:
     float mx_ = 0, my_ = 0;
     bool clicked_ = false;
     bool overUi_ = false;
+    float wheel_ = 0.0f, pendingWheel_ = 0.0f;
+
+    int editId_ = 0;
+    bool editSeen_ = false, commit_ = false, cancel_ = false;
+    std::string buffer_;
 };

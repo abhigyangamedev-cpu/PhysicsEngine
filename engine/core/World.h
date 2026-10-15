@@ -26,6 +26,7 @@ struct WorldSettings {
     float linearDamping = 0.0f;
     float angularDamping = 0.05f;
     int particleIterations = 4;
+    bool minFriction = false; // contact friction is the smaller of the two coefficients instead of their geometric mean
 };
 
 class World {
@@ -45,6 +46,7 @@ public:
         return raw;
     }
     void destroyJoint(Joint* joint);
+    void rebuildJointPairs(); // call after changing a joint's collideConnected
 
     template <typename T>
     T* addField() {
@@ -76,7 +78,6 @@ private:
     Softness contactSoft_;
     uint32_t nextId_ = 0;
 
-    void rebuildJointPairs();
     void integrateVelocities(float h);
     void detectContacts();
     void prepareContacts(float h);

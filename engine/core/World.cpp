@@ -215,7 +215,7 @@ void World::solveContacts(bool useBias) {
         Body* b = m.b;
         const Vec2 n = m.normal;
         const Vec2 t = cross(n, 1.0f);
-        const float mu = std::sqrt(a->friction * b->friction);
+        const float mu = settings.minFriction ? std::min(a->friction, b->friction) : std::sqrt(a->friction * b->friction);
 
         for (int i = 0; i < m.count; ++i) {
             auto& c = m.contacts[i];

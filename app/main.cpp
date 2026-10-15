@@ -13,6 +13,7 @@ int main() {
         return 1;
     }
     SDL_SetRenderVSync(sdl, 1);
+    SDL_StartTextInput(window);
     SDL_SetRenderDrawBlendMode(sdl, SDL_BLENDMODE_BLEND);
 
     int w = 0, h = 0;

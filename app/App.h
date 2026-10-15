@@ -2,10 +2,11 @@
 #include "Renderer.h"
 #include "Scenes.h"
 #include "Ui.h"
+#include "editor/Editor.h"
 #include <deque>
 #include <unordered_map>
 
-enum class Screen { Home, Menu2D, Simulation };
+enum class Screen { Home, Menu2D, Simulation, Editor };
 
 struct Grab {
     pe::MouseJoint* joint = nullptr;
@@ -32,6 +33,7 @@ private:
     Camera cam_;
     Renderer gfx_;
     Ui ui_;
+    editor::Editor editor_;
     Screen screen_ = Screen::Home;
     bool running_ = true;
 

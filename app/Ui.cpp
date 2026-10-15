@@ -1,4 +1,8 @@
 #include "Ui.h"
+#include "Expr.h"
+#include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <string>
 
 void Ui::begin(float mouseX, float mouseY, bool clicked) {
@@ -6,6 +10,68 @@ void Ui::begin(float mouseX, float mouseY, bool clicked) {
     my_ = mouseY;
     clicked_ = clicked;
     overUi_ = false;
+    wheel_ = pendingWheel_;
+    pendingWheel_ = 0.0f;
+    if (editId_ && !editSeen_) editId_ = 0; // the field being edited is no longer drawn
+    editSeen_ = false;
+}
+
+void Ui::textInput(const char* utf8) {
+    if (editId_) buffer_ += utf8;
+}
+
+void Ui::keyDown(SDL_Keycode key) {
+    if (!editId_) return;
+    if (key == SDLK_BACKSPACE && !buffer_.empty()) buffer_.pop_back();
+    if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_TAB) commit_ = true;
+    if (key == SDLK_ESCAPE) cancel_ = true;
+}
+
+bool Ui::numberField(SDL_FRect r, int id, float& value, float step, bool enabled) {
+    const bool hot = hovered(r);
+    if (hot) overUi_ = true;
+    const bool active = editId_ == id;
+    bool changed = false;
+
+    if (active) {
+        editSeen_ = true;
+        if (clicked_ && !hot) commit_ = true;
+        if (cancel_ || commit_) {
+            if (commit_) {
+                if (auto v = evaluate(buffer_)) {
+                    changed = static_cast<float>(*v) != value;
+                    value = static_cast<float>(*v);
+                }
+            }
+            editId_ = 0;
+            commit_ = cancel_ = false;
+        }
+    } else if (enabled && hot && clicked_) {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "%.6g", value);
+        buffer_ = buf;
+        editId_ = id;
+        editSeen_ = true;
+        commit_ = cancel_ = false;
+    } else if (enabled && hot && step > 0.0f && wheel_ != 0.0f) {
+        value = std::round((value + step * (wheel_ > 0.0f ? 1.0f : -1.0f)) / step) * step;
+        if (std::abs(value) < step * 1e-3f) value = 0.0f;
+        wheel_ = 0.0f;
+        changed = true;
+    }
+
+    const bool editingNow = editId_ == id;
+    gfx_.fillRect(r, editingNow ? Color{14, 16, 21} : (hot && enabled ? theme::panelHover : Color{22, 25, 32}));
+    gfx_.strokeRect(r, editingNow ? theme::accentHover : theme::border);
+    char buf[40];
+    if (editingNow) std::snprintf(buf, sizeof buf, "%s_", buffer_.c_str());
+    else std::snprintf(buf, sizeof buf, "%.5g", value);
+    const float s = 1.25f;
+    const size_t fit = static_cast<size_t>((r.w - 12.0f) / Renderer::textWidth("M", s));
+    const size_t len = std::strlen(buf);
+    const char* shown = len > fit ? buf + (len - fit) : buf; // keep the cursor end visible
+    gfx_.text(r.x + 6.0f, r.y + (r.h - Renderer::textHeight(s)) * 0.5f, shown, enabled ? theme::text : theme::textFaint, s);
+    return changed;
 }
 
 bool Ui::hovered(SDL_FRect r) const {

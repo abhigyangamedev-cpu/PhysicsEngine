@@ -45,6 +45,13 @@ add_executable(PhysicsEngine
         app/App.cpp
         app/Ui.cpp
         app/Renderer.cpp
+        app/WorldDraw.cpp
+        app/Expr.cpp
+        app/editor/EditorScene.cpp
+        app/editor/Editor.cpp
+        app/editor/EditorPanels.cpp
+        app/editor/Simulation.cpp
+        app/editor/Examples.cpp
         app/Scenes.cpp
         app/scenes/Machines.cpp
         app/scenes/Oscillations.cpp
@@ -57,3 +64,24 @@ add_executable(PhysicsEngine
 target_include_directories(PhysicsEngine PRIVATE app)
 target_link_libraries(PhysicsEngine PRIVATE physics SDL3::SDL3)
 target_compile_options(PhysicsEngine PRIVATE -Wall -Wextra)
+
+# Headless tests for the editor's scene model, simulation and examples (no SDL needed).
+add_executable(editor_tests
+        tests/main.cpp
+        tests/ExprTests.cpp
+        tests/SceneTests.cpp
+        tests/MechanicsTests.cpp
+        tests/OscillationTests.cpp
+        tests/CollisionFieldTests.cpp
+        tests/ExampleTests.cpp
+        app/Expr.cpp
+        app/editor/EditorScene.cpp
+        app/editor/Simulation.cpp
+        app/editor/Examples.cpp
+)
+target_include_directories(editor_tests PRIVATE app tests)
+target_link_libraries(editor_tests PRIVATE physics)
+target_compile_options(editor_tests PRIVATE -Wall -Wextra)
+
+enable_testing()
+add_test(NAME editor_tests COMMAND editor_tests)
