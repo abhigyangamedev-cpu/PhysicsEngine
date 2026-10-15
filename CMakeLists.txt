@@ -31,6 +31,15 @@ find_package(Threads REQUIRED)
 target_link_libraries(physics PUBLIC Threads::Threads)
 target_compile_options(physics PRIVATE -Wall -Wextra)
 
+add_library(physics3d STATIC
+        engine3d/rigid/Body3.cpp
+        engine3d/rigid/Collision3.cpp
+        engine3d/rigid/Joint3.cpp
+        engine3d/core/World3.cpp
+)
+target_include_directories(physics3d PUBLIC engine3d)
+target_compile_options(physics3d PRIVATE -Wall -Wextra)
+
 find_package(SDL3 CONFIG QUIET)
 if (NOT SDL3_FOUND)
     message(STATUS "SDL3 not found; fetching and building it from source")
@@ -66,10 +75,31 @@ add_executable(PhysicsEngine
         app/scenes/Rotation.cpp
         app/scenes/Thermo.cpp
         app/scenes/Optics.cpp
+        app3d/Viewer3.cpp
+        app3d/Overlay3.cpp
+        app3d/Gl.cpp
+        app3d/Renderer3.cpp
+        app3d/Scenes3.cpp
 )
-target_include_directories(PhysicsEngine PRIVATE app)
-target_link_libraries(PhysicsEngine PRIVATE physics SDL3::SDL3)
+target_include_directories(PhysicsEngine PRIVATE app app3d)
+target_link_libraries(PhysicsEngine PRIVATE physics physics3d SDL3::SDL3)
 target_compile_options(PhysicsEngine PRIVATE -Wall -Wextra)
+
+add_executable(PhysicsEngine3D
+        app3d/main3d.cpp
+        app3d/Viewer3.cpp
+        app3d/Overlay3.cpp
+        app3d/Gl.cpp
+        app3d/Renderer3.cpp
+        app3d/Scenes3.cpp
+        app/Ui.cpp
+        app/Renderer.cpp
+        app/Expr.cpp
+)
+# the overlay reuses the 2D app's Ui widgets, which need the 2D math header
+target_include_directories(PhysicsEngine3D PRIVATE app3d app engine)
+target_link_libraries(PhysicsEngine3D PRIVATE physics3d SDL3::SDL3)
+target_compile_options(PhysicsEngine3D PRIVATE -Wall -Wextra)
 
 # Headless tests for the editor's scene model, simulation and examples (no SDL needed).
 add_executable(editor_tests
@@ -100,3 +130,14 @@ target_compile_options(editor_tests PRIVATE -Wall -Wextra)
 
 enable_testing()
 add_test(NAME editor_tests COMMAND editor_tests)
+
+add_executable(physics3d_tests
+        tests/main.cpp
+        tests3d/PhysicsTests3.cpp
+        tests3d/JointTests3.cpp
+        app3d/Scenes3.cpp
+)
+target_include_directories(physics3d_tests PRIVATE app3d tests)
+target_link_libraries(physics3d_tests PRIVATE physics3d)
+target_compile_options(physics3d_tests PRIVATE -Wall -Wextra)
+add_test(NAME physics3d_tests COMMAND physics3d_tests)

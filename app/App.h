@@ -5,6 +5,7 @@
 #include "editor/Editor.h"
 #include <deque>
 #include <unordered_map>
+#include <utility>
 
 enum class Screen { Home, Menu2D, Simulation, Editor };
 
@@ -28,6 +29,7 @@ public:
     void handleEvent(const SDL_Event& e);
     void frame(float dt);
     bool running() const { return running_; }
+    bool take3DRequest() { return std::exchange(open3D_, false); }
 
 private:
     Camera cam_;
@@ -36,6 +38,7 @@ private:
     editor::Editor editor_;
     Screen screen_ = Screen::Home;
     bool running_ = true;
+    bool open3D_ = false;
 
     pe::World world_;
     pe::World backdrop_;

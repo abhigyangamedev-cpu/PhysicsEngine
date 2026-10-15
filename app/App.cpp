@@ -1,4 +1,5 @@
 #include "App.h"
+#include "Scenes3.h"
 #include "WorldDraw.h"
 #include <algorithm>
 #include <cstdio>
@@ -278,8 +279,10 @@ void App::drawHome() {
         editor_.enter();
         screen_ = Screen::Editor;
     }
-    ui_.card({x0 + 2.0f * (cw + gap), y, cw, ch}, "3D", "Rigid bodies and constraints in three dimensions",
-             "Planned once the 2D engine is complete", "Coming soon", false, theme::accent, 6.0f);
+    std::snprintf(badge, sizeof badge, "%zu scenes", scenes3::all().size());
+    if (ui_.card({x0 + 2.0f * (cw + gap), y, cw, ch}, "3D", "Rigid bodies and joints in three dimensions",
+                 "Pendulums, Newton's cradle, bridges, ragdolls and collapsing towers", badge, true, theme::accent, 6.0f))
+        open3D_ = true;
 
     ui_.labelCentered(W * 0.5f, H - 40.0f, "ESC to quit", theme::textFaint, 1.25f);
 }
