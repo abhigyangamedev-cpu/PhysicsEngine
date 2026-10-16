@@ -357,7 +357,7 @@ void Workspace::drawResult(float x, float y, float w, float h, Action& action) {
 void Workspace::drawSaved(float x, float y, float w, float h) {
     State& s = state();
     ui_.label(x, y, "Saved simulations", theme::text, 1.5f);
-    char count[32];
+    char count[64];
     std::snprintf(count, sizeof count, "%zu in %s/", s.saved.size(), kSavedProblemsDir);
     ui_.label(x + w - Renderer::textWidth(count, 1.0f), y + 4.0f, count, theme::textFaint, 1.0f);
     y += 26.0f;

@@ -9,8 +9,22 @@ endif ()
 
 option(PE_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 if (PE_SANITIZE)
-    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
-    add_link_options(-fsanitize=address,undefined)
+    if (MSVC)
+        add_compile_options(/fsanitize=address /Zi)
+    else ()
+        add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
+        add_link_options(-fsanitize=address,undefined)
+    endif ()
+endif ()
+
+if (MSVC)
+    set(PE_WARNINGS /W3 /utf-8 /permissive- /Zc:__cplusplus)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+else ()
+    set(PE_WARNINGS -Wall -Wextra)
+endif ()
+if (WIN32)
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
 endif ()
 
 add_library(physics STATIC
@@ -29,7 +43,7 @@ add_library(physics STATIC
 target_include_directories(physics PUBLIC engine)
 find_package(Threads REQUIRED)
 target_link_libraries(physics PUBLIC Threads::Threads)
-target_compile_options(physics PRIVATE -Wall -Wextra)
+target_compile_options(physics PRIVATE ${PE_WARNINGS})
 
 add_library(physics3d STATIC
         engine3d/rigid/Body3.cpp
@@ -38,7 +52,7 @@ add_library(physics3d STATIC
         engine3d/core/World3.cpp
 )
 target_include_directories(physics3d PUBLIC engine3d)
-target_compile_options(physics3d PRIVATE -Wall -Wextra)
+target_compile_options(physics3d PRIVATE ${PE_WARNINGS})
 
 # Turns a physics question into a checked simulation with Claude; shared by the app and its tests.
 set(AI_SOURCES
@@ -49,8 +63,17 @@ set(AI_SOURCES
         ai/Http.cpp
 )
 set(AI_LIBS)
+set(AI_DEFS)
 if (WIN32)
     set(AI_LIBS winhttp)
+else ()
+    find_package(CURL QUIET)
+    if (CURL_FOUND)
+        set(AI_LIBS CURL::libcurl)
+        set(AI_DEFS PE_HAVE_CURL)
+    else ()
+        message(WARNING "libcurl not found; the AI question workspace will build without networking")
+    endif ()
 endif ()
 
 find_package(SDL3 CONFIG QUIET)
@@ -99,9 +122,10 @@ add_executable(PhysicsEngine
         app/Workspace.cpp
         ${AI_SOURCES}
 )
-target_include_directories(PhysicsEngine PRIVATE app app3d ai)
+target_include_directories(PhysicsEngine PRIVATE app app3d ai third_party)
 target_link_libraries(PhysicsEngine PRIVATE physics physics3d SDL3::SDL3 ${AI_LIBS})
-target_compile_options(PhysicsEngine PRIVATE -Wall -Wextra)
+target_compile_options(PhysicsEngine PRIVATE ${PE_WARNINGS})
+target_compile_definitions(PhysicsEngine PRIVATE ${AI_DEFS})
 
 add_executable(PhysicsEngine3D
         app3d/main3d.cpp
@@ -118,9 +142,9 @@ add_executable(PhysicsEngine3D
         app/Expr.cpp
 )
 # the overlay reuses the 2D app's Ui widgets, which need the 2D math header
-target_include_directories(PhysicsEngine3D PRIVATE app3d app engine)
+target_include_directories(PhysicsEngine3D PRIVATE app3d app engine third_party)
 target_link_libraries(PhysicsEngine3D PRIVATE physics3d SDL3::SDL3)
-target_compile_options(PhysicsEngine3D PRIVATE -Wall -Wextra)
+target_compile_options(PhysicsEngine3D PRIVATE ${PE_WARNINGS})
 
 # Headless tests for the editor's scene model, simulation and examples (no SDL needed).
 add_executable(editor_tests
@@ -148,7 +172,7 @@ add_executable(editor_tests
 )
 target_include_directories(editor_tests PRIVATE app tests)
 target_link_libraries(editor_tests PRIVATE physics)
-target_compile_options(editor_tests PRIVATE -Wall -Wextra)
+target_compile_options(editor_tests PRIVATE ${PE_WARNINGS})
 
 enable_testing()
 add_test(NAME editor_tests COMMAND editor_tests)
@@ -165,7 +189,7 @@ add_executable(physics3d_tests
 )
 target_include_directories(physics3d_tests PRIVATE app3d tests)
 target_link_libraries(physics3d_tests PRIVATE physics3d)
-target_compile_options(physics3d_tests PRIVATE -Wall -Wextra)
+target_compile_options(physics3d_tests PRIVATE ${PE_WARNINGS})
 add_test(NAME physics3d_tests COMMAND physics3d_tests)
 
 # Headless tests for the question workspace: JSON, scene reading, measuring, and the repair loop
@@ -183,7 +207,8 @@ add_executable(ai_tests
 )
 target_include_directories(ai_tests PRIVATE app app3d ai tests)
 target_link_libraries(ai_tests PRIVATE physics physics3d ${AI_LIBS})
-target_compile_options(ai_tests PRIVATE -Wall -Wextra)
+target_compile_options(ai_tests PRIVATE ${PE_WARNINGS})
+target_compile_definitions(ai_tests PRIVATE ${AI_DEFS})
 add_test(NAME ai_tests COMMAND ai_tests)
 
 # Drives the real app windows (needs a display): every screen, problem and 3D mode opens, runs and exits.
@@ -219,7 +244,8 @@ add_executable(ui_tests
         app/Workspace.cpp
         ${AI_SOURCES}
 )
-target_include_directories(ui_tests PRIVATE app app3d ai tests tests_ai)
+target_include_directories(ui_tests PRIVATE app app3d ai tests tests_ai third_party)
 target_link_libraries(ui_tests PRIVATE physics physics3d SDL3::SDL3 ${AI_LIBS})
-target_compile_options(ui_tests PRIVATE -Wall -Wextra)
+target_compile_options(ui_tests PRIVATE ${PE_WARNINGS})
+target_compile_definitions(ui_tests PRIVATE ${AI_DEFS})
 add_test(NAME ui_tests COMMAND ui_tests)

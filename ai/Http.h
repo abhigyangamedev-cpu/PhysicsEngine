@@ -1,5 +1,5 @@
 #pragma once
-// Blocking HTTPS POST. Implemented with WinHTTP on Windows; elsewhere it reports that it is unavailable.
+// Blocking HTTPS POST: WinHTTP on Windows, libcurl elsewhere; without either it reports that it is unavailable.
 #include <string>
 #include <utility>
 #include <vector>

@@ -1,9 +1,14 @@
 #include "Http.h"
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #include <winhttp.h>
+#elif defined(PE_HAVE_CURL)
+#include <curl/curl.h>
+#include <mutex>
 #endif
 
 namespace ai::http {
@@ -91,11 +96,72 @@ Response post(const std::string& host, const std::string& path, const Headers& h
     return r;
 }
 
+#elif defined(PE_HAVE_CURL)
+
+namespace {
+
+size_t append(char* data, size_t size, size_t count, void* out) {
+    static_cast<std::string*>(out)->append(data, size * count);
+    return size * count;
+}
+
+std::string describe(CURLcode code, const char* detail) {
+    switch (code) {
+    case CURLE_OPERATION_TIMEDOUT: return "the request timed out";
+    case CURLE_COULDNT_RESOLVE_HOST: return "could not resolve the server name: check the internet connection";
+    case CURLE_COULDNT_CONNECT: return "could not connect to the server: check the internet connection";
+    default: return std::string("the request failed: ") + (*detail ? detail : curl_easy_strerror(code));
+    }
+}
+
+} // namespace
+
+Response post(const std::string& host, const std::string& path, const Headers& headers, const std::string& body,
+              int timeoutSeconds) {
+    Response r;
+    // curl_global_init is not thread-safe and requests run on worker threads
+    static std::once_flag once;
+    std::call_once(once, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        r.error = "could not start libcurl";
+        return r;
+    }
+    curl_slist* list = nullptr;
+    for (const auto& [name, value] : headers) list = curl_slist_append(list, (name + ": " + value).c_str());
+    list = curl_slist_append(list, "Expect:"); // skip the 100-continue round trip on large bodies
+
+    const std::string url = "https://" + host + path;
+    char detail[CURL_ERROR_SIZE] = {};
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, list);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.data());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, curl_off_t(body.size()));
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "PhysicsEngine/1.0");
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, long(timeoutSeconds));
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, append);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &r.body);
+    curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, detail);
+
+    const CURLcode code = curl_easy_perform(curl);
+    if (code != CURLE_OK) r.error = describe(code, detail);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    r.status = int(status);
+
+    curl_slist_free_all(list);
+    curl_easy_cleanup(curl);
+    return r;
+}
+
 #else
 
 Response post(const std::string&, const std::string&, const Headers&, const std::string&, int) {
     Response r;
-    r.error = "networking is only built for Windows (WinHTTP) in this version";
+    r.error = "this build has no networking: rebuild with libcurl installed";
     return r;
 }
 
