@@ -42,6 +42,7 @@ void ParticleSystem::attach(uint32_t particle, Body* body, float compliance) {
 
 void ParticleSystem::removeBody(const Body* body) {
     std::erase_if(attachments, [body](const Attachment& a) { return a.body == body; });
+    std::erase_if(carried_, [body](const Carried& c) { return c.body == body; });
 }
 
 void ParticleSystem::clear() {
@@ -49,6 +50,8 @@ void ParticleSystem::clear() {
     links.clear();
     pressures.clear();
     attachments.clear();
+    carried_.clear();
+    begun_ = false;
     groupCounter_ = 0;
 }
 
@@ -70,9 +73,47 @@ int ParticleSystem::nearest(Vec2 point, float maxDistance) const {
     return best;
 }
 
-void ParticleSystem::step(float h, Vec2 gravity, const std::vector<std::unique_ptr<Body>>& bodies, float bodyStep) {
-    if (particles.empty()) return;
+void ParticleSystem::beginBodyStep() {
+    carried_.clear();
+    for (const auto& at : attachments) {
+        Body* b = at.body;
+        if (b->isStatic) continue;
+        if (std::none_of(carried_.begin(), carried_.end(), [b](const Carried& c) { return c.body == b; }))
+            carried_.push_back({b, b->position, b->angle, {}, 0.0f});
+    }
+    begun_ = true;
+}
 
+void ParticleSystem::step(float h, Vec2 gravity, const std::vector<std::unique_ptr<Body>>& bodies, int iterations) {
+    if (!begun_) beginBodyStep(); // nobody moved the bodies: they start where they are
+    begun_ = false;
+    if (particles.empty()) return;
+    iterations = std::max(1, iterations);
+    const float ph = h / static_cast<float>(iterations);
+    // rewind to the start of the step and split the rigid motion over the particle steps, so a
+    // correction made in one of them is in time with the particle it pulls on
+    for (auto& c : carried_) {
+        Body& b = *c.body;
+        std::swap(b.position, c.position);
+        std::swap(b.angle, c.angle);
+        c.position = (c.position - b.position) / static_cast<float>(iterations);
+        c.angle = (c.angle - b.angle) / static_cast<float>(iterations);
+        c.velocity = b.velocity;
+        c.angularVelocity = b.angularVelocity;
+    }
+    for (int i = 0; i < iterations; ++i) {
+        // the rigid motion, plus whatever velocity the attachments have added so far
+        for (const auto& c : carried_) {
+            Body& b = *c.body;
+            b.position += c.position + (b.velocity - c.velocity) * ph;
+            b.angle += c.angle + (b.angularVelocity - c.angularVelocity) * ph;
+            b.updateTransform();
+        }
+        substep(ph, gravity, bodies);
+    }
+}
+
+void ParticleSystem::substep(float h, Vec2 gravity, const std::vector<std::unique_ptr<Body>>& bodies) {
     const float damp = 1.0f / (1.0f + h * damping);
     for (auto& p : particles) {
         p.previous = p.position;
@@ -80,16 +121,23 @@ void ParticleSystem::step(float h, Vec2 gravity, const std::vector<std::unique_p
         p.velocity = (p.velocity + gravity * h) * damp;
         p.position += p.velocity * h;
     }
+    predicted_.resize(particles.size());
+    for (size_t i = 0; i < particles.size(); ++i) predicted_[i] = particles[i].position;
 
     const float alphaScale = 1.0f / (h * h);
     solveLinks(alphaScale);
     solvePressures(alphaScale);
-    solveAttachments(bodyStep > 0.0f ? bodyStep : h, alphaScale);
+    solveAttachments(h, alphaScale);
     if (selfCollision) collideParticles();
     collideBodies(h, bodies);
 
     const float invH = 1.0f / h;
-    for (auto& p : particles) p.velocity = p.invMass > 0.0f ? (p.position - p.previous) * invH : Vec2{};
+    // only the constraints' corrections change the velocity: re-deriving all of it from positions loses
+    // the gravity increment to rounding once a particle is far from the origin and moving fast
+    for (size_t i = 0; i < particles.size(); ++i) {
+        Particle& p = particles[i];
+        p.velocity = p.invMass > 0.0f ? p.velocity + (p.position - predicted_[i]) * invH : Vec2{};
+    }
 }
 
 void ParticleSystem::solveLinks(float alphaScale) {
@@ -137,7 +185,7 @@ void ParticleSystem::solvePressures(float alphaScale) {
     }
 }
 
-void ParticleSystem::solveAttachments(float bodyStep, float alphaScale) {
+void ParticleSystem::solveAttachments(float h, float alphaScale) {
     for (auto& at : attachments) {
         Particle& p = particles[at.particle];
         Body& b = *at.body;
@@ -154,12 +202,12 @@ void ParticleSystem::solveAttachments(float bodyStep, float alphaScale) {
         p.position += n * (lambda * p.invMass);
         if (b.isStatic) continue;
         // move the body now so later iterations see the correction instead of stacking impulses on it,
-        // and give it the matching velocity over the step it integrates with
+        // and give it the same momentum the particle gets from its side of the correction
         Vec2 j = -n * lambda;
         b.position += j * b.invMass;
         b.angle += cross(r, j) * b.invInertia;
         b.updateTransform();
-        b.applyImpulse(j / bodyStep, r);
+        b.applyImpulse(j / h, r);
     }
 }
 

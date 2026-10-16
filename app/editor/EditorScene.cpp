@@ -4,9 +4,11 @@
 #include <cstdio>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <numbers>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace editor {
 
@@ -15,6 +17,15 @@ using namespace pe;
 namespace {
 
 constexpr float kDeg = std::numbers::pi_v<float> / 180.0f;
+
+// Limits well past anything a lesson needs, but inside what a float simulation survives.
+constexpr float kMaxCoord = 1e6f, kMaxSize = 1e4f, kMaxMass = 1e9f, kMaxSpeed = 1e5f;
+
+float finiteOr(float v, float fallback) { return std::isfinite(v) ? v : fallback; }
+float clampFinite(float v, float lo, float hi, float fallback) { return std::clamp(finiteOr(v, fallback), lo, hi); }
+Vec2 clampFinite(Vec2 v, float limit) {
+    return {clampFinite(v.x, -limit, limit, 0.0f), clampFinite(v.y, -limit, limit, 0.0f)};
+}
 
 Body* addAnchor(World& w, Vec2 p) {
     BodyDef d;
@@ -39,29 +50,49 @@ Shape ObjectSpec::shape() const {
 
 void ObjectSpec::sanitize() {
     if (int(kind) < 0 || int(kind) > int(ObjKind::Wedge)) kind = ObjKind::Block;
-    mass = std::max(mass, 1e-3f);
-    friction = std::max(friction, 0.0f);
-    restitution = std::clamp(restitution, 0.0f, 1.0f);
+    pos = clampFinite(pos, kMaxCoord);
+    angleDeg = std::fmod(finiteOr(angleDeg, 0.0f), 360.0f);
+    width = clampFinite(width, 0.02f, kMaxSize, 1.0f);
+    height = clampFinite(height, 0.02f, kMaxSize, 1.0f);
+    radius = clampFinite(radius, 0.01f, kMaxSize, 0.5f);
+    base = clampFinite(base, 0.05f, kMaxSize, 4.0f);
+    slopeDeg = clampFinite(slopeDeg, 1.0f, 85.0f, 30.0f);
+    mass = clampFinite(mass, 1e-3f, kMaxMass, 1.0f);
+    velocity = clampFinite(velocity, kMaxSpeed);
+    omega = clampFinite(omega, -kMaxSpeed, kMaxSpeed, 0.0f);
+    force = clampFinite(force, 1e12f);
+    friction = clampFinite(friction, 0.0f, 10.0f, 0.0f);
+    restitution = clampFinite(restitution, 0.0f, 1.0f, 0.0f);
+    charge = clampFinite(charge, -1e3f, 1e3f, 0.0f);
 }
 
 void LinkSpec::sanitize() {
     if (int(kind) < 0 || int(kind) > int(LinkKind::Pulley)) kind = LinkKind::Rod;
-    k = std::max(k, 0.0f);
-    damping = std::max(damping, 0.0f);
-    ratio = std::max(ratio, 0.1f);
-    wheelRadius = std::max(wheelRadius, 0.02f);
+    a.local = clampFinite(a.local, kMaxCoord);
+    b.local = clampFinite(b.local, kMaxCoord);
+    k = clampFinite(k, 0.0f, 1e12f, 50.0f);
+    damping = clampFinite(damping, 0.0f, 1e9f, 0.0f);
+    length = std::min(finiteOr(length, -1.0f), 2.0f * kMaxCoord);
+    wheel = clampFinite(wheel, kMaxCoord);
+    ratio = clampFinite(ratio, 0.1f, 10.0f, 1.0f);
+    wheelRadius = clampFinite(wheelRadius, 0.02f, kMaxSize, 0.3f);
 }
 
 void WorldSpec::sanitize() {
-    timeScale = std::clamp(timeScale, 0.01f, 10.0f);
-    stopAt = std::max(stopAt, 0.0f);
-    drag = std::max(drag, 0.0f);
+    g = clampFinite(g, -1e4f, 1e4f, 9.81f);
+    timeScale = clampFinite(timeScale, 0.01f, 10.0f, 1.0f);
+    stopAt = clampFinite(stopAt, 0.0f, 1e7f, 0.0f);
+    drag = clampFinite(drag, 0.0f, 1e3f, 0.0f);
+    E = clampFinite(E, 1e12f);
+    B = clampFinite(B, -1e12f, 1e12f, 0.0f);
+    coulombK = clampFinite(coulombK, 0.0f, 1e12f, 8.99e9f);
+    G = clampFinite(G, 0.0f, 1e12f, 1.0f);
 }
 
 void Scene::sanitize() {
     world.sanitize();
     for (auto& o : objects) o.sanitize();
-    for (auto& l : links) l.sanitize();
+    for (auto& l : links) l.sanitize(); // links stay put: the built world keeps one entry per link
 }
 
 ObjectSpec* Scene::object(int id) {
@@ -81,6 +112,40 @@ LinkSpec* Scene::link(int id) {
 void Scene::removeObject(int id) {
     std::erase_if(links, [id](const LinkSpec& l) { return l.a.obj == id || l.b.obj == id; });
     std::erase_if(objects, [id](const ObjectSpec& o) { return o.id == id; });
+}
+
+void Scene::renumber() {
+    // a file's ids can't be trusted: negative, so large the next one overflows, or used twice
+    constexpr int kMaxId = 1'000'000'000;
+    std::unordered_set<int> used;
+    auto take = [&used](int id) { return id > 0 && id <= kMaxId && used.insert(id).second; };
+    std::unordered_map<int, int> objectIds; // id in the file -> id here; links follow the first object that had it
+    std::vector<ObjectSpec*> renamedObjects;
+    std::vector<LinkSpec*> renamedLinks;
+    for (auto& o : objects)
+        if (take(o.id)) objectIds.emplace(o.id, o.id);
+        else renamedObjects.push_back(&o);
+    for (auto& l : links)
+        if (!take(l.id)) renamedLinks.push_back(&l);
+    int next = 1;
+    auto fresh = [&] {
+        while (!used.insert(next).second) ++next;
+        return next;
+    };
+    for (ObjectSpec* o : renamedObjects) {
+        const int fileId = o->id;
+        o->id = fresh();
+        objectIds.emplace(fileId, o->id); // a duplicate's links stay with the first object that had the id
+    }
+    for (LinkSpec* l : renamedLinks) l->id = fresh();
+    for (auto& l : links)
+        for (Endpoint* e : {&l.a, &l.b}) {
+            if (e->obj < 0) continue;
+            auto it = objectIds.find(e->obj);
+            e->obj = it == objectIds.end() ? std::numeric_limits<int>::max() : it->second; // missing: no object has it
+        }
+    nextId = 1;
+    for (int id : used) nextId = std::max(nextId, id + 1);
 }
 
 void Scene::removeLink(int id) {
@@ -272,6 +337,7 @@ void build(const Scene& scene, World& w, Built& out) {
 bool Scene::save(const char* path) const {
     std::ofstream f(path);
     if (!f) return false;
+    f << std::setprecision(std::numeric_limits<float>::max_digits10); // every float reads back exactly
     const WorldSpec& w = world;
     f << "world " << w.g << ' ' << w.timeScale << ' ' << w.stopAt << ' ' << w.drag << ' ' << w.E.x << ' ' << w.E.y << ' '
       << w.B << ' ' << w.coulomb << ' ' << w.coulombK << ' ' << w.mutualGravity << ' ' << w.G << '\n';
@@ -318,9 +384,9 @@ bool Scene::load(const char* path) {
             if (in) s.links.push_back(l);
         }
     }
+    s.renumber();
+    std::erase_if(s.links, [&s](const LinkSpec& l) { return (l.a.obj >= 0 && !s.object(l.a.obj)) || (l.b.obj >= 0 && !s.object(l.b.obj)); });
     s.sanitize();
-    for (const auto& o : s.objects) s.nextId = std::max(s.nextId, o.id + 1);
-    for (const auto& l : s.links) s.nextId = std::max(s.nextId, l.id + 1);
     *this = std::move(s);
     return true;
 }

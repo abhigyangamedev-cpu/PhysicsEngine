@@ -1,4 +1,5 @@
 #include "Json.h"
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -86,12 +87,14 @@ struct Parser {
                 unsigned cp = 0;
                 if (!hex4(cp)) return false;
                 if (cp >= 0xd800 && cp < 0xdc00 && i + 1 < s.size() && s[i] == '\\' && s[i + 1] == 'u') {
+                    const size_t at = i;
                     i += 2;
                     unsigned lo = 0;
                     if (!hex4(lo)) return false;
-                    cp = 0x10000 + ((cp - 0xd800) << 10) + (lo - 0xdc00);
+                    if (lo >= 0xdc00 && lo < 0xe000) cp = 0x10000 + ((cp - 0xd800) << 10) + (lo - 0xdc00);
+                    else i = at; // not the second half: that escape stands on its own
                 }
-                appendUtf8(out, cp);
+                appendUtf8(out, cp >= 0xd800 && cp < 0xe000 ? 0xfffd : cp); // half a pair has no UTF-8
                 break;
             }
             default: return fail("bad escape");
@@ -178,11 +181,27 @@ struct Parser {
             ok = literal("null");
             out = Value();
         } else if (c == '-' || (c >= '0' && c <= '9')) {
-            const char* begin = s.c_str() + i;
-            char* end = nullptr;
-            double d = std::strtod(begin, &end);
-            if (end == begin) return fail("bad number");
-            i += size_t(end - begin);
+            // JSON's grammar, checked before strtod, which would also take hex, inf and nan
+            const size_t start = i;
+            auto digits = [&] {
+                const size_t from = i;
+                while (i < s.size() && s[i] >= '0' && s[i] <= '9') ++i;
+                return i > from;
+            };
+            if (s[i] == '-') ++i;
+            if (i < s.size() && s[i] == '0') ++i;
+            else if (!digits()) return fail("bad number");
+            if (i < s.size() && s[i] == '.') {
+                ++i;
+                if (!digits()) return fail("bad number");
+            }
+            if (i < s.size() && (s[i] == 'e' || s[i] == 'E')) {
+                ++i;
+                if (i < s.size() && (s[i] == '+' || s[i] == '-')) ++i;
+                if (!digits()) return fail("bad number");
+            }
+            const double d = std::strtod(s.c_str() + start, nullptr);
+            if (!std::isfinite(d)) return fail("number out of range");
             out = Value(d);
         } else {
             ok = fail("unexpected character");
@@ -268,9 +287,12 @@ void Value::write(std::string& out, int indent, int depth) const {
             break;
         }
         char buf[32];
-        if (num_ == std::floor(num_) && std::abs(num_) < 1e15) std::snprintf(buf, sizeof buf, "%.0f", num_);
-        else std::snprintf(buf, sizeof buf, "%.9g", num_);
-        out += buf;
+        if (num_ == std::floor(num_) && std::abs(num_) < 1e15) {
+            std::snprintf(buf, sizeof buf, "%.0f", num_);
+            out += buf;
+        } else {
+            out.append(buf, std::to_chars(buf, buf + sizeof buf, num_).ptr); // shortest text that reads back exactly
+        }
         break;
     }
     case Type::String: out += escape(str_); break;

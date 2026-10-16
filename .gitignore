@@ -4,3 +4,4 @@ cmake-build-*/
 *.o
 *.a
 ai_problems/
+build-*/

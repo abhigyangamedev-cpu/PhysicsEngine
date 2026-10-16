@@ -1,5 +1,6 @@
 #include "rigid/Shape.h"
 #include <algorithm>
+#include <cmath>
 #include <numbers>
 
 namespace pe {
@@ -39,6 +40,8 @@ Shape Shape::box(float hw, float hh) {
 
 Shape Shape::polygon(std::vector<Vec2> points) {
     constexpr float kMinHalf = 0.005f;
+    // a NaN or infinite point has no place in a hull, and would turn the fallback box into one too
+    std::erase_if(points, [](Vec2 p) { return !std::isfinite(p.x) || !std::isfinite(p.y); });
     Aabb box{{1e30f, 1e30f}, {-1e30f, -1e30f}};
     for (Vec2 p : points) {
         box.min = {std::min(box.min.x, p.x), std::min(box.min.y, p.y)};
@@ -49,23 +52,25 @@ Shape Shape::polygon(std::vector<Vec2> points) {
     s.type = ShapeType::Polygon;
     s.vertices = convexHull(std::move(points));
 
-    // shift so the centroid sits at the origin
-    Vec2 c;
-    float area = 0.0f;
+    // shift so the centroid sits at the origin; in double, so a big shape's area doesn't overflow
+    double cx = 0.0, cy = 0.0, area = 0.0;
     const size_t n = s.vertices.size();
     for (size_t i = 0; i < n; ++i) {
         Vec2 a = s.vertices[i], b = s.vertices[(i + 1) % n];
-        float tri = 0.5f * cross(a, b);
+        double tri = 0.5 * (double(a.x) * b.y - double(a.y) * b.x);
         area += tri;
-        c += (a + b) * (tri / 3.0f);
+        cx += (double(a.x) + b.x) * (tri / 3.0);
+        cy += (double(a.y) + b.y) * (tri / 3.0);
     }
     // too few or collinear points: fall back to a thin box over their extent
-    if (n < 3 || !(area > 1e-8f)) {
+    if (n < 3 || !(area > 1e-8)) {
         Vec2 half = box.min.x > box.max.x ? Vec2{} : (box.max - box.min) * 0.5f;
         half = {std::max(half.x, kMinHalf), std::max(half.y, kMinHalf)};
-        return polygon({{-half.x, -half.y}, {half.x, -half.y}, {half.x, half.y}, {-half.x, half.y}});
+        s.vertices = {{-half.x, -half.y}, {half.x, -half.y}, {half.x, half.y}, {-half.x, half.y}};
+        s.normals = {{0.0f, -1.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 0.0f}};
+        return s;
     }
-    c = c / area;
+    const Vec2 c{float(cx / area), float(cy / area)};
     for (auto& v : s.vertices) v -= c;
 
     s.normals.resize(n);

@@ -234,7 +234,7 @@ void Editor::drawLinkInspector(LinkSpec& l, float x, float y, float w) {
     const Built& built = sim_.built();
     for (size_t i = 0; i < sim_.scene().links.size(); ++i)
         if (sim_.scene().links[i].id == l.id) idx = static_cast<int>(i);
-    if (!started_ || idx < 0) return;
+    if (!started_ || idx < 0 || idx >= static_cast<int>(built.springIndex.size())) return;
     r.section("Live");
     if (int s = built.springIndex[idx]; s >= 0) {
         const auto& sp = built.springs->springs[s];

@@ -90,8 +90,10 @@ float World::magneticFieldAt(Vec2 p) const {
 }
 
 void World::step(float dt) {
-    const float h = dt / static_cast<float>(settings.substeps);
-    for (int s = 0; s < settings.substeps; ++s) {
+    if (!(dt > 0.0f) || !std::isfinite(dt)) return; // no time passes, and 1/h would poison everything
+    const int substeps = std::max(1, settings.substeps);
+    const float h = dt / static_cast<float>(substeps);
+    for (int s = 0; s < substeps; ++s) {
         for (auto& f : fields_) f->apply(*this, h);
         integrateVelocities(h);
         detectContacts();
@@ -101,6 +103,7 @@ void World::step(float dt) {
             solveJoints(true);
             solveContacts(true);
         }
+        particles.beginBodyStep();
         integratePositions(h);
         // remove the velocity injected by position correction so it doesn't become kinetic energy
         for (int i = 0; i < settings.relaxIterations; ++i) {
@@ -109,10 +112,9 @@ void World::step(float dt) {
         }
         applyRestitution();
 
-        const float ph = h / static_cast<float>(settings.particleIterations);
-        for (int i = 0; i < settings.particleIterations; ++i) particles.step(ph, settings.gravity, bodies_, h);
+        particles.step(h, settings.gravity, bodies_, settings.particleIterations);
         // the fluid takes fewer, larger steps than the rigid solver
-        const int every = std::max(1, settings.substeps / std::max(1, fluid.stepsPerFrame));
+        const int every = std::max(1, substeps / std::max(1, fluid.stepsPerFrame));
         if ((s + 1) % every == 0) fluid.step(h * every, settings.gravity, bodies_);
     }
     for (auto& b : bodies_) {

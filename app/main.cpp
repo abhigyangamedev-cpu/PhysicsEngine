@@ -1,5 +1,7 @@
 #include "App.h"
 #include "Viewer3.h"
+#include <cstdio>
+#include <cstdlib>
 #include <optional>
 
 int main() {
@@ -18,6 +20,7 @@ int main() {
             SDL_Log("Window creation failed: %s", SDL_GetError());
             return 1;
         }
+        SDL_SetWindowMinimumSize(window, 960, 600); // the layouts need at least this much room
         SDL_SetRenderVSync(sdl, 1);
         SDL_StartTextInput(window);
         SDL_SetRenderDrawBlendMode(sdl, SDL_BLENDMODE_BLEND);
@@ -52,5 +55,8 @@ int main() {
     }
 
     SDL_Quit();
-    return 0;
+    // A question still being answered runs on a detached thread that may be waiting on the network for
+    // minutes; ending without static destructors keeps it from reading the prompt and schema as they go.
+    std::fflush(nullptr);
+    std::quick_exit(0);
 }

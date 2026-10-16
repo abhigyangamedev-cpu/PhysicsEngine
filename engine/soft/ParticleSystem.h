@@ -47,8 +47,11 @@ public:
     void attach(uint32_t particle, Body* body, float compliance = 0.0f);
     int newGroup() { return ++groupCounter_; }
 
-    // bodyStep: the rigid step the bodies integrate over (several particle steps may share one)
-    void step(float h, Vec2 gravity, const std::vector<std::unique_ptr<Body>>& bodies, float bodyStep = 0.0f);
+    // Call before the rigid solver moves the bodies over a step: the particle steps then walk attached
+    // bodies along that motion with them instead of seeing them a whole step ahead.
+    void beginBodyStep();
+    // Advances h in `iterations` particle steps.
+    void step(float h, Vec2 gravity, const std::vector<std::unique_ptr<Body>>& bodies, int iterations = 1);
     void removeBody(const Body* body);
     void clear();
 
@@ -65,10 +68,22 @@ public:
 private:
     int groupCounter_ = 0;
     std::vector<uint32_t> cellStart_, cellEntries_;
+    std::vector<Vec2> predicted_; // where each particle would be with no constraints, this step
+    struct Carried {
+        Body* body;
+        Vec2 position; // where the body was before the rigid solver moved it
+        float angle;
+        Vec2 velocity; // and its velocity before the attachments changed it
+        float angularVelocity;
+    };
+    std::vector<Carried> carried_; // the dynamic bodies something is attached to
+    bool begun_ = false;
+
+    void substep(float h, Vec2 gravity, const std::vector<std::unique_ptr<Body>>& bodies);
 
     void solveLinks(float alphaScale);
     void solvePressures(float alphaScale);
-    void solveAttachments(float bodyStep, float alphaScale);
+    void solveAttachments(float h, float alphaScale);
     void collideParticles();
     void collideBodies(float h, const std::vector<std::unique_ptr<Body>>& bodies);
 };

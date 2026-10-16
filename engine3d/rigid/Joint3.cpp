@@ -46,14 +46,16 @@ Mat3 Joint::pointMass() const {
     return Mat3::diagonal({m, m, m}) + (sA * a->invInertiaWorld * sA + sB * b->invInertiaWorld * sB) * -1.0f;
 }
 
+// Static bodies are skipped rather than given impulse * 0: the world anchor is shared by every world,
+// and one blown-up scene's NaN times zero would otherwise poison every later scene's pinned joints.
 void Joint::applyLinear(Vec3 impulse) {
-    a->applyImpulse(-impulse, rA_);
-    b->applyImpulse(impulse, rB_);
+    if (!a->isStatic) a->applyImpulse(-impulse, rA_);
+    if (!b->isStatic) b->applyImpulse(impulse, rB_);
 }
 
 void Joint::applyAngular(Vec3 impulse) {
-    a->angularVelocity -= a->invInertiaWorld * impulse;
-    b->angularVelocity += b->invInertiaWorld * impulse;
+    if (!a->isStatic) a->angularVelocity -= a->invInertiaWorld * impulse;
+    if (!b->isStatic) b->angularVelocity += b->invInertiaWorld * impulse;
 }
 
 // ---------------------------------------------------------------- ball

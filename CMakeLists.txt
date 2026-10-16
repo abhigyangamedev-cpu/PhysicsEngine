@@ -132,6 +132,7 @@ add_executable(editor_tests
         tests/CollisionFieldTests.cpp
         tests/ExampleTests.cpp
         tests/StressTests.cpp
+        tests/EdgeCaseTests.cpp
         app/Expr.cpp
         app/editor/EditorScene.cpp
         app/editor/Simulation.cpp
@@ -157,6 +158,7 @@ add_executable(physics3d_tests
         tests3d/PhysicsTests3.cpp
         tests3d/JointTests3.cpp
         tests3d/ProblemTests3.cpp
+        tests3d/EdgeCaseTests3.cpp
         app3d/Scenes3.cpp
         app3d/EditorScene3.cpp
         app3d/Problems3.cpp
@@ -173,6 +175,7 @@ add_executable(ai_tests
         tests_ai/JsonTests.cpp
         tests_ai/SpecTests.cpp
         tests_ai/GeneratorTests.cpp
+        tests_ai/EdgeCaseTests.cpp
         ${AI_SOURCES}
         app/editor/EditorScene.cpp
         app/editor/Simulation.cpp

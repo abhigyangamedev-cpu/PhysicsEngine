@@ -243,9 +243,11 @@ void World::detectUntilStable() {
 }
 
 void World::step(float dt) {
+    if (!(dt > 0.0f) || !std::isfinite(dt)) return; // no time passes, and 1/h would poison everything
     wakeDisturbed();
-    const float h = dt / static_cast<float>(settings.substeps);
-    for (int s = 0; s < settings.substeps; ++s) {
+    const int substeps = std::max(1, settings.substeps);
+    const float h = dt / static_cast<float>(substeps);
+    for (int s = 0; s < substeps; ++s) {
         integrateVelocities(h);
         detectUntilStable();
         prepareContacts(h);

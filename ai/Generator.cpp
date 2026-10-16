@@ -441,9 +441,18 @@ bool saveSpec(const Spec& spec, const std::string& dir, std::string& path) {
     std::error_code ec;
     fs::create_directories(toPath(dir), ec);
     const std::time_t now = std::time(nullptr);
+    std::tm local{};
+#ifdef _WIN32
+    localtime_s(&local, &now); // this runs on the generation's worker thread
+#else
+    localtime_r(&now, &local);
+#endif
     char stamp[32];
-    std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", std::localtime(&now));
-    const fs::path file = toPath(dir) / (std::string(stamp) + "-" + slug(spec.title) + ".json");
+    std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &local);
+    // the same question asked twice in a second must not overwrite the first answer
+    const std::string base = std::string(stamp) + "-" + slug(spec.title);
+    fs::path file = toPath(dir) / (base + ".json");
+    for (int n = 2; fs::exists(file, ec) && n < 1000; ++n) file = toPath(dir) / (base + "-" + std::to_string(n) + ".json");
     std::ofstream f(file, std::ios::binary);
     if (!f) return false;
     f << spec.source.dump(2) << '\n';
@@ -454,8 +463,10 @@ bool saveSpec(const Spec& spec, const std::string& dir, std::string& path) {
 std::vector<Saved> loadSaved(const std::string& dir) {
     std::vector<Saved> out;
     std::error_code ec;
-    for (const auto& entry : fs::directory_iterator(toPath(dir), ec)) {
-        if (entry.path().extension() != ".json") continue;
+    // advanced with increment(ec): a range-for's ++ throws on an unreadable entry and would take the app down
+    for (fs::directory_iterator it(toPath(dir), ec), end; !ec && it != end; it.increment(ec)) {
+        const fs::directory_entry& entry = *it;
+        if (entry.path().extension() != ".json" || !entry.is_regular_file(ec)) continue;
         std::ifstream f(entry.path(), std::ios::binary);
         std::stringstream text;
         text << f.rdbuf();

@@ -387,6 +387,7 @@ Exit run(int width, int height, Launch launch, FrameHook hook) {
         SDL_Log("Window creation failed: %s", SDL_GetError());
         return Exit::Back;
     }
+    SDL_SetWindowMinimumSize(window, 960, 600); // the overlay's panels need at least this much room
     SDL_GLContext ctx = SDL_GL_CreateContext(window);
     if (!ctx) {
         SDL_Log("GL context failed: %s", SDL_GetError());

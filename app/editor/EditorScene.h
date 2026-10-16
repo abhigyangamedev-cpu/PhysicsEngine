@@ -89,6 +89,7 @@ struct Scene {
 
     bool save(const char* path) const;
     bool load(const char* path);
+    void renumber(); // makes every id unique and positive, keeping links on the objects they named
 };
 
 Scene defaultScene();

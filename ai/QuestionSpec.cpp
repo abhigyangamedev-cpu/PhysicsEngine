@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <numbers>
 #include <set>
 
@@ -48,23 +49,32 @@ std::string ascii(const std::string& s) {
     return out;
 }
 
+// A double too big for a float has no float value at all (the cast is undefined), so it gets the fallback.
+bool toFloat(double d, float& out) {
+    if (!(std::abs(d) <= double(std::numeric_limits<float>::max()))) return false;
+    out = float(d);
+    return true;
+}
+
 float num(const json::Value& o, const char* key, float fallback) {
-    const double d = o[key].asNumber(fallback);
-    return std::isfinite(d) ? float(d) : fallback;
+    float f = fallback;
+    return toFloat(o[key].asNumber(fallback), f) ? f : fallback;
 }
 
 pe::Vec2 vec2(const json::Value& o, const char* key, pe::Vec2 fallback = {}) {
     const json::Value& a = o[key];
-    if (!a.isArray()) return fallback;
-    const float x = float(a[0].asNumber(fallback.x)), y = float(a[1].asNumber(fallback.y));
-    return std::isfinite(x) && std::isfinite(y) ? pe::Vec2{x, y} : fallback;
+    pe::Vec2 v;
+    if (!a.isArray() || !toFloat(a[0].asNumber(fallback.x), v.x) || !toFloat(a[1].asNumber(fallback.y), v.y)) return fallback;
+    return v;
 }
 
 Vec3 vec3(const json::Value& o, const char* key, Vec3 fallback = {}) {
     const json::Value& a = o[key];
-    if (!a.isArray()) return fallback;
-    const float x = float(a[0].asNumber(fallback.x)), y = float(a[1].asNumber(fallback.y)), z = float(a[2].asNumber(fallback.z));
-    return std::isfinite(x) && std::isfinite(y) && std::isfinite(z) ? Vec3{x, y, z} : fallback;
+    Vec3 v;
+    if (!a.isArray() || !toFloat(a[0].asNumber(fallback.x), v.x) || !toFloat(a[1].asNumber(fallback.y), v.y) ||
+        !toFloat(a[2].asNumber(fallback.z), v.z))
+        return fallback;
+    return v;
 }
 
 template <typename E, size_t N>
@@ -83,6 +93,8 @@ std::string choices(const char* const (&names)[N]) {
     for (size_t i = 0; i < N; ++i) s += (i ? ", " : "") + std::string(names[i]);
     return s;
 }
+
+constexpr size_t kMaxObjects = 200, kMaxLinks = 200;
 
 constexpr const char* kEvents[] = {"time", "lands", "crosses_x", "crosses_y", "crosses_z", "apex", "stops", "distance", "reversals"};
 constexpr const char* kQuantities[] = {"time", "x", "y", "z", "speed", "vx", "vy", "vz", "distance", "range",
@@ -106,6 +118,11 @@ struct Reader {
         if (name.empty()) fail("object " + std::to_string(index) + " has no name");
         else if (!names.insert(name).second) fail("two objects are both named \"" + name + "\"; names must be unique");
         return name;
+    }
+    // A lesson needs a handful of objects; thousands would make every check run crawl.
+    void limit(size_t objects, size_t links) {
+        if (objects > kMaxObjects) fail("the scene has " + std::to_string(objects) + " objects; use at most " + std::to_string(kMaxObjects));
+        if (links > kMaxLinks) fail("the scene has " + std::to_string(links) + " links; use at most " + std::to_string(kMaxLinks));
     }
     void positive(float v, const std::string& what) {
         if (!(v > 0.0f)) fail(what + " must be greater than zero");
@@ -141,6 +158,7 @@ void read2D(const json::Value& j, editor::Scene& s, Reader& r) {
 
     const auto& objects = j["objects"].items();
     if (objects.empty()) r.fail("the 2D scene has no objects");
+    r.limit(objects.size(), j["links"].size());
     for (size_t i = 0; i < objects.size(); ++i) {
         const json::Value& o = objects[i];
         ObjectSpec spec;
@@ -211,10 +229,11 @@ void read3D(const json::Value& j, editor3::Scene& s, Reader& r) {
     s.world.g = num(w, "g", 9.81f);
     s.world.ground = w.flag("ground", true);
     s.world.groundFriction = num(w, "ground_friction", 0.6f);
-    s.world.substeps = std::clamp(int(num(w, "substeps", 8.0f)), 1, 32);
+    s.world.substeps = int(std::clamp(num(w, "substeps", 8.0f), 1.0f, 32.0f)); // clamped before the cast can overflow
 
     const auto& objects = j["objects"].items();
     if (objects.empty()) r.fail("the 3D scene has no objects");
+    r.limit(objects.size(), j["links"].size());
     for (size_t i = 0; i < objects.size(); ++i) {
         const json::Value& o = objects[i];
         const std::string name = r.objectName(o, i);
@@ -573,7 +592,8 @@ std::shared_ptr<Spec> readSpec(const json::Value& v, std::string& error) {
         out.timeout = std::max(out.timeout, out.value + 1.0f);
     }
     if (out.event == Event::Distance && !(out.value > 0.0f)) r.fail("a \"distance\" event needs event_value > 0");
-    if (out.event == Event::Reversals && out.value < 1.0f) r.fail("a \"reversals\" event needs event_value >= 1");
+    if (out.event == Event::Reversals && !(out.value >= 1.0f && out.value <= 1000.0f))
+        r.fail("a \"reversals\" event needs event_value from 1 to 1000");
     if (out.quantity == Quantity::Period && (out.event != Event::Reversals || out.value < 2.0f))
         r.fail("quantity \"period\" needs event \"reversals\" with event_value >= 2 (3 or more is better)");
     if (out.event == Event::CrossesZ && spec->space == Space::TwoD) r.fail("crosses_z needs a 3D scene");
