@@ -1,6 +1,7 @@
 #pragma once
 #include "EditorScene3.h"
 #include "Problems3.h"
+#include <memory>
 #include "Renderer3.h"
 #include <SDL3/SDL.h>
 #include <deque>
@@ -20,6 +21,7 @@ public:
     explicit Editor3(Overlay& overlay);
     void openSandbox();
     void openProblem(int index);
+    void openCustom(std::shared_ptr<const editor3::CustomProblem> problem); // a problem made at run time
     void handle(const SDL_Event& e);
     // window* in window coordinates (the mouse's), pixel* in framebuffer pixels
     void frame(float dt, Renderer3& renderer, int windowW, int windowH, int pixelW, int pixelH);
@@ -58,7 +60,8 @@ private:
     bool showLabels_ = true, showVel_ = true, showTrails_ = false, showGraph_ = true;
     Plot plot_ = Plot::Speed;
 
-    int problem_ = -1; // showing this problem; editing is locked
+    int problem_ = -1; // showing this built-in problem; editing is locked
+    std::shared_ptr<const editor3::CustomProblem> custom_; // or this one, made at run time
     bool showAnswer_ = false;
     editor3::ProblemRun run_;
 
@@ -76,7 +79,9 @@ private:
     int winW_ = 1280, winH_ = 760;
     std::vector<Line3> extras_;
 
-    bool locked() const { return started_ || problem_ >= 0; }
+    const editor3::Problem* problemDef() const; // the problem being shown, if any
+    void loadProblem(const editor3::Problem& p);
+    bool locked() const { return started_ || problemDef(); }
     void setStatus(std::string s);
     void select(int obj, int link);
 

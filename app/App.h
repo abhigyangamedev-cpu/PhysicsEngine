@@ -3,13 +3,14 @@
 #include "Scenes.h"
 #include "Ui.h"
 #include "Viewer3.h"
+#include "Workspace.h"
 #include "editor/Editor.h"
 #include <deque>
 #include <optional>
 #include <unordered_map>
 #include <utility>
 
-enum class Screen { Home, Menu2D, Simulation, Editor, EditorPick, Problems };
+enum class Screen { Home, Menu2D, Simulation, Editor, EditorPick, Problems, Workspace };
 
 struct Grab {
     pe::MouseJoint* joint = nullptr;
@@ -39,13 +40,16 @@ public:
     Screen screen() const { return screen_; }
     int problemTab() const { return problemTab_; }
     const editor::Editor& editor() const { return editor_; }
+    Workspace& workspace() { return workspace_; }
 
 private:
     Camera cam_;
     Renderer gfx_;
     Ui ui_;
     editor::Editor editor_;
+    Workspace workspace_;
     Screen screen_ = Screen::Home;
+    bool editorFromWorkspace_ = false; // the 2D editor is showing a generated problem
     bool running_ = true;
     std::optional<view3d::Launch> open3D_;
     int problemTab_ = 0; // 0 = 2D problems, 1 = 3D problems
@@ -76,6 +80,7 @@ private:
     void simulate(pe::World& world, float dt, bool interactive);
 
     void drawHome();
+    void drawWorkspace();
     void drawEditorPick();
     void drawProblems();
     void drawMenu2D();

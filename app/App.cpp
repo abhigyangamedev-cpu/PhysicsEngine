@@ -1,5 +1,6 @@
 #include "App.h"
 #include "Problems3.h"
+#include "QuestionSpec.h"
 #include "Scenes3.h"
 #include "WorldDraw.h"
 #include <algorithm>
@@ -55,7 +56,8 @@ void Grab::end(World& w) {
     particle = -1;
 }
 
-App::App(SDL_Renderer* sdl, int width, int height) : gfx_(sdl, cam_), ui_(gfx_), editor_(gfx_, ui_, cam_) {
+App::App(SDL_Renderer* sdl, int width, int height)
+    : gfx_(sdl, cam_), ui_(gfx_), editor_(gfx_, ui_, cam_), workspace_(gfx_, ui_, cam_, SDL_GetRenderWindow(sdl)) {
     cam_.width = width;
     cam_.height = height;
     resetBackdrop();
@@ -136,7 +138,11 @@ void App::handleEvent(const SDL_Event& e) {
             grab_.end(world_);
         }
         break;
+    case SDL_EVENT_DROP_FILE:
+        if (screen_ == Screen::Workspace) workspace_.dropFile(e.drop.data);
+        break;
     case SDL_EVENT_MOUSE_WHEEL:
+        if (screen_ == Screen::Workspace) workspace_.handleWheel(e.wheel.y);
         if (screen_ == Screen::Simulation) cam_.scale *= e.wheel.y > 0 ? 1.1f : 1.0f / 1.1f;
         if (screen_ == Screen::Menu2D || screen_ == Screen::Problems) menuScroll_ -= e.wheel.y * 60.0f;
         break;
@@ -146,7 +152,8 @@ void App::handleEvent(const SDL_Event& e) {
             if (screen_ == Screen::Simulation) {
                 grab_.end(world_);
                 screen_ = Screen::Menu2D;
-            } else if (screen_ == Screen::Menu2D || screen_ == Screen::EditorPick || screen_ == Screen::Problems) {
+            } else if (screen_ == Screen::Menu2D || screen_ == Screen::EditorPick || screen_ == Screen::Problems ||
+                       screen_ == Screen::Workspace) {
                 screen_ = Screen::Home;
             } else {
                 running_ = false;
@@ -206,6 +213,7 @@ void App::frame(float dt) {
     case Screen::EditorPick: drawBackdrop(dt); drawEditorPick(); break;
     case Screen::Problems: drawBackdrop(dt); drawProblems(); break;
     case Screen::Menu2D: drawBackdrop(dt); drawMenu2D(); break;
+    case Screen::Workspace: drawWorkspace(); break;
     case Screen::Simulation:
         if (stirring_ && leftHeld_ && dt > 0.0f) {
             Vec2 m = cam_.toWorld(mouse_);
@@ -226,7 +234,9 @@ void App::frame(float dt) {
     case Screen::Editor:
         editor_.frame(dt);
         if (editor_.exitRequested()) {
-            screen_ = editor_.inProblem() ? Screen::Problems : Screen::EditorPick;
+            screen_ = std::exchange(editorFromWorkspace_, false) ? Screen::Workspace
+                      : editor_.inProblem()                      ? Screen::Problems
+                                                                 : Screen::EditorPick;
             problemTab_ = 0;
         }
         break;
@@ -273,6 +283,24 @@ void App::resumeAfter3D(const view3d::Launch& from) {
         screen_ = Screen::Problems;
         problemTab_ = 1;
         break;
+    case view3d::Launch::Mode::Custom: screen_ = Screen::Workspace; break;
+    }
+}
+
+void App::drawWorkspace() {
+    const Workspace::Action a = workspace_.frame();
+    if (a.kind == Workspace::Action::Kind::Back) {
+        screen_ = Screen::Home;
+    } else if (a.kind == Workspace::Action::Kind::Open && a.spec) {
+        if (a.spec->space == ai::Space::TwoD) {
+            editor_.openCustom(ai::toExample(a.spec));
+            editorFromWorkspace_ = true;
+            screen_ = Screen::Editor;
+        } else {
+            view3d::Launch launch{view3d::Launch::Mode::Custom};
+            launch.custom = ai::toProblem(a.spec);
+            open3D_ = launch;
+        }
     }
 }
 
@@ -323,6 +351,17 @@ void App::drawHome() {
     if (ui_.card(cards[3], "3D", "Rigid bodies and joints in three dimensions",
                  "Pendulums, Newton's cradle, bridges, ragdolls and collapsing towers", badge, true, theme::accent, 3.5f))
         open3D_ = view3d::Launch{};
+
+    // the AI workspace spans the row of cards below them
+    const SDL_FRect last = cards.back();
+    const float bannerY = last.y + last.h + 24.0f, bannerH = std::min(110.0f, H - 60.0f - bannerY);
+    if (bannerH > 60.0f) {
+        const SDL_FRect banner{cards.front().x, bannerY, last.x + last.w - cards.front().x, bannerH};
+        if (ui_.card(banner, "Question Workspace", "Type or upload a physics question: Claude or OpenAI builds a simulation that measures the answer",
+                     nullptr, "AI", true, {150, 120, 220}, 2.25f)) {
+            screen_ = Screen::Workspace;
+        }
+    }
 
     ui_.labelCentered(W * 0.5f, H - 40.0f, "ESC to quit", theme::textFaint, 1.25f);
 }

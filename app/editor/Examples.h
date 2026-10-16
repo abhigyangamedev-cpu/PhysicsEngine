@@ -1,5 +1,6 @@
 #pragma once
 #include "editor/Simulation.h"
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -20,13 +21,25 @@ struct Example {
     const char* question;
     const char* answer;
     float expected; // textbook value of the asked-for quantity
-    Scene (*setup)();
+    std::function<Scene()> setup;
     Vec2 cameraCenter;
     float cameraScale;
     const char* focus; // object selected and graphed on load
     int plot;          // editor::Plot shown on load
     // Called after every step; returns true to pause (the asked-for moment was reached).
-    bool (*monitor)(const Simulation&, ExampleRun&);
+    std::function<bool(const Simulation&, ExampleRun&)> monitor;
+    const char* unit = ""; // of expected, shown next to it when set
+};
+
+// A problem made at run time (e.g. from an uploaded question). It owns the text its example points
+// into, so it is shared rather than copied.
+struct CustomExample {
+    std::string name, topic, question, answer, focus, unit;
+    Example example{};
+
+    CustomExample() = default;
+    CustomExample(const CustomExample&) = delete;
+    CustomExample& operator=(const CustomExample&) = delete;
 };
 
 const std::vector<Example>& examples();

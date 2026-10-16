@@ -40,6 +40,19 @@ add_library(physics3d STATIC
 target_include_directories(physics3d PUBLIC engine3d)
 target_compile_options(physics3d PRIVATE -Wall -Wextra)
 
+# Turns a physics question into a checked simulation with Claude; shared by the app and its tests.
+set(AI_SOURCES
+        ai/Json.cpp
+        ai/QuestionSpec.cpp
+        ai/Prompt.cpp
+        ai/Generator.cpp
+        ai/Http.cpp
+)
+set(AI_LIBS)
+if (WIN32)
+    set(AI_LIBS winhttp)
+endif ()
+
 find_package(SDL3 CONFIG QUIET)
 if (NOT SDL3_FOUND)
     message(STATUS "SDL3 not found; fetching and building it from source")
@@ -83,9 +96,11 @@ add_executable(PhysicsEngine
         app3d/EditorScene3.cpp
         app3d/Problems3.cpp
         app3d/Editor3.cpp
+        app/Workspace.cpp
+        ${AI_SOURCES}
 )
-target_include_directories(PhysicsEngine PRIVATE app app3d)
-target_link_libraries(PhysicsEngine PRIVATE physics physics3d SDL3::SDL3)
+target_include_directories(PhysicsEngine PRIVATE app app3d ai)
+target_link_libraries(PhysicsEngine PRIVATE physics physics3d SDL3::SDL3 ${AI_LIBS})
 target_compile_options(PhysicsEngine PRIVATE -Wall -Wextra)
 
 add_executable(PhysicsEngine3D
@@ -151,6 +166,23 @@ target_link_libraries(physics3d_tests PRIVATE physics3d)
 target_compile_options(physics3d_tests PRIVATE -Wall -Wextra)
 add_test(NAME physics3d_tests COMMAND physics3d_tests)
 
+# Headless tests for the question workspace: JSON, scene reading, measuring, and the repair loop
+# against a scripted API (no network needed).
+add_executable(ai_tests
+        tests/main.cpp
+        tests_ai/JsonTests.cpp
+        tests_ai/SpecTests.cpp
+        tests_ai/GeneratorTests.cpp
+        ${AI_SOURCES}
+        app/editor/EditorScene.cpp
+        app/editor/Simulation.cpp
+        app3d/EditorScene3.cpp
+)
+target_include_directories(ai_tests PRIVATE app app3d ai tests)
+target_link_libraries(ai_tests PRIVATE physics physics3d ${AI_LIBS})
+target_compile_options(ai_tests PRIVATE -Wall -Wextra)
+add_test(NAME ai_tests COMMAND ai_tests)
+
 # Drives the real app windows (needs a display): every screen, problem and 3D mode opens, runs and exits.
 add_executable(ui_tests
         tests/main.cpp
@@ -181,8 +213,10 @@ add_executable(ui_tests
         app3d/EditorScene3.cpp
         app3d/Problems3.cpp
         app3d/Editor3.cpp
+        app/Workspace.cpp
+        ${AI_SOURCES}
 )
-target_include_directories(ui_tests PRIVATE app app3d tests)
-target_link_libraries(ui_tests PRIVATE physics physics3d SDL3::SDL3)
+target_include_directories(ui_tests PRIVATE app app3d ai tests tests_ai)
+target_link_libraries(ui_tests PRIVATE physics physics3d SDL3::SDL3 ${AI_LIBS})
 target_compile_options(ui_tests PRIVATE -Wall -Wextra)
 add_test(NAME ui_tests COMMAND ui_tests)

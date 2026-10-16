@@ -3,7 +3,9 @@
 #include "App.h"
 #include "Check.h"
 #include "Problems3.h"
+#include "QuestionSpec.h"
 #include "Scenes3.h"
+#include "SpecHelpers.h"
 #include "Viewer3.h"
 #include <cmath>
 #include <memory>
@@ -336,4 +338,92 @@ TEST(ui_3d_problem_index_out_of_range_falls_back_to_sandbox) {
     g_script = {};
     key3(20, SDLK_ESCAPE);
     CHECK(run3({view3d::Launch::Mode::Problem, 999}) == view3d::Exit::Back);
+}
+
+// ---------------------------------------------------------------- the question workspace
+
+namespace {
+
+// A generated problem, as the workspace would hold it after Claude answered.
+std::shared_ptr<const ai::Spec> generated(bool threeD) {
+    using namespace spec_json;
+    const std::string text =
+        threeD ? answer3(object3("Ball", "ball", R"("position":[0,5.2,0],"radius":0.2)"), "", measure("lands", "Ball", 0, "time"), 1.0)
+               : answer2(object2("Ball", "ball", R"("position":[0,10.1],"radius":0.1,"no_spin":true)"), "",
+                         measure("lands", "Ball", 0, "time"), 1.43);
+    std::string error;
+    return ai::readSpec(parsed(text), error);
+}
+
+void clickWorkspaceBanner(Harness& h) { h.click(640.0f, 560.0f); } // spans the card row, below it
+void clickOpenSimulation(Harness& h) { h.click(720.0f, 421.0f); }
+
+} // namespace
+
+TEST(ui_workspace_opens_from_home_and_escapes_back) {
+    Harness h;
+    clickWorkspaceBanner(h);
+    CHECK(h.screen() == Screen::Workspace);
+    h.click(200.0f, 150.0f); // into the question box
+    SDL_Event e{};
+    e.type = SDL_EVENT_TEXT_INPUT;
+    e.text.text = "A ball is dropped";
+    h.send(e);
+    h.key(SDLK_RETURN); // a new line, not a commit
+    h.frames(2);
+    h.key(SDLK_ESCAPE); // leaves the box first
+    CHECK(h.screen() == Screen::Workspace);
+    h.key(SDLK_ESCAPE);
+    CHECK(h.screen() == Screen::Home);
+    CHECK(h.app->running());
+}
+
+TEST(ui_workspace_opens_a_2d_result_in_the_editor_and_comes_back) {
+    Harness h;
+    clickWorkspaceBanner(h);
+    auto spec = generated(false);
+    CHECK(spec);
+    if (!spec) return;
+    h.app->workspace().showResult(spec);
+    h.frames(2);
+    clickOpenSimulation(h);
+    CHECK(h.screen() == Screen::Editor);
+    CHECK(h.app->editor().inProblem());
+    CHECK(h.app->editor().scene().objects.size() == 2);
+    h.key(SDLK_SPACE);
+    h.frames(240); // the ball lands about 1.4 s in
+    CHECK(h.app->editor().problemRun().done);
+    CHECK_NEAR(h.app->editor().problemRun().result, 1.43, 0.02);
+    h.click(40.0f, 26.0f); // < Back
+    CHECK(h.screen() == Screen::Workspace);
+}
+
+TEST(ui_workspace_sends_a_3d_result_to_the_3d_window) {
+    Harness h;
+    clickWorkspaceBanner(h);
+    auto spec = generated(true);
+    CHECK(spec);
+    if (!spec) return;
+    h.app->workspace().showResult(spec);
+    h.frames(2);
+    clickOpenSimulation(h);
+    auto launch = h.app->take3DRequest();
+    CHECK(launch && launch->mode == view3d::Launch::Mode::Custom && launch->custom);
+    if (!launch) return;
+    h.app->resumeAfter3D(*launch);
+    CHECK(h.screen() == Screen::Workspace);
+}
+
+TEST(ui_3d_generated_problem_opens_runs_and_backs_out) {
+    auto spec = generated(true);
+    CHECK(spec);
+    if (!spec) return;
+    view3d::Launch launch{view3d::Launch::Mode::Custom};
+    launch.custom = ai::toProblem(spec);
+    g_script = {};
+    key3(10, SDLK_SPACE);
+    key3(200, SDLK_ESCAPE); // deselect the focus object
+    key3(205, SDLK_ESCAPE); // back
+    CHECK(run3(launch) == view3d::Exit::Back);
+    CHECK(g_lastFrame < 900);
 }

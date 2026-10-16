@@ -36,6 +36,10 @@ public:
     // Click to type a value (see Expr.h); Enter or clicking away commits, Esc cancels, the wheel
     // nudges by step. Returns true on the frame the value changes. id must be unique and nonzero.
     bool numberField(SDL_FRect r, int id, float& value, float step = 0.0f, bool enabled = true);
+    // Click to type free text, edited in place. Enter adds a line when multiline (otherwise finishes),
+    // Ctrl+V pastes, Esc or clicking away finishes. Returns true on the frames the text changes.
+    bool textArea(SDL_FRect r, int id, std::string& text, const char* placeholder, bool multiline = true,
+                  bool masked = false, size_t maxLength = 6000);
     bool editing() const { return editId_ != 0; }
     void textInput(const char* utf8);
     void keyDown(SDL_Keycode key);
@@ -52,5 +56,6 @@ private:
 
     int editId_ = 0;
     bool editSeen_ = false, commit_ = false, cancel_ = false;
+    bool textMode_ = false, multiline_ = false; // the field being edited is a textArea
     std::string buffer_;
 };

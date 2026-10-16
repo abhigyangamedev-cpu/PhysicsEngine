@@ -30,13 +30,13 @@ float plotValue(const Sample& s, Plot p) {
 void Editor::drawToolbar() {
     const float W = float(cam_.width);
     ui_.panel({0, 0, W, kTop});
-    if (ui_.button({12, 10, problemMode_ ? 110.0f : 84.0f, kTop - 20}, problemMode_ ? "< Problems" : "< Home", false, 1.25f)) {
+    if (ui_.button({12, 10, problemMode_ ? 110.0f : 84.0f, kTop - 20}, custom_ ? "< Back" : problemMode_ ? "< Problems" : "< Home", false, 1.25f)) {
         exit_ = true;
         return;
     }
     float x = 108.0f;
     if (problemMode_) {
-        const std::string title = std::string("2D problem: ") + examples()[example_].name;
+        const std::string title = std::string("2D problem: ") + problemDef()->name;
         ui_.label(134.0f, (kTop - Renderer::textHeight(1.5f)) * 0.5f, title.c_str(), theme::text, 1.5f);
     }
     for (int i = 0; i < static_cast<int>(std::size(kToolNames)) && !problemMode_; ++i) {
@@ -290,7 +290,7 @@ void Editor::drawWorldInspector(float x, float y, float w) {
 }
 
 void Editor::drawProblemPanel(float x, float y, float w) {
-    const Example& ex = examples()[example_];
+    const Example& ex = *problemDef();
     ui_.label(x, y, ex.topic, theme::accentHover, 1.0f);
     y += 18.0f;
     ui_.label(x, y, "Question", theme::text, 1.25f);
@@ -313,8 +313,11 @@ void Editor::drawProblemPanel(float x, float y, float w) {
     }
     if (exampleRun_.done) {
         char buf[96];
-        std::snprintf(buf, sizeof buf, "textbook %.4g  (sim %+.2f%%)", ex.expected,
-                      100.0 * (exampleRun_.result - ex.expected) / ex.expected);
+        if (ex.expected != 0.0f)
+            std::snprintf(buf, sizeof buf, "textbook %.4g %s  (sim %+.2f%%)", ex.expected, ex.unit,
+                          100.0 * (exampleRun_.result - ex.expected) / ex.expected);
+        else
+            std::snprintf(buf, sizeof buf, "textbook %.4g %s", ex.expected, ex.unit);
         ui_.label(x, y + 4.0f, buf, theme::textDim, 1.0f);
         y += 20.0f;
     }
@@ -323,7 +326,7 @@ void Editor::drawProblemPanel(float x, float y, float w) {
         showAnswer_ = !showAnswer_;
     if (ui_.button({x + 158.0f, y, 150.0f, 26.0f}, "Open in editor", false, 1.0f)) {
         problemMode_ = false; // keep the scene, unlock it; the monitor stops
-        example_ = -1;
+        clearProblem();
         reset();
         setStatus("Problem opened in the 2D editor: change anything and press Play");
         return;

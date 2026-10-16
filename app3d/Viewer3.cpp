@@ -34,6 +34,7 @@ public:
         }
         screen_ = Screen::Editor;
         if (launch.mode == Launch::Mode::Problem) editor_.openProblem(launch.problem);
+        else if (launch.mode == Launch::Mode::Custom) editor_.openCustom(launch.custom);
         else editor_.openSandbox();
     }
 

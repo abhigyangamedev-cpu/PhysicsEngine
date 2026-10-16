@@ -2,6 +2,7 @@
 // Real-life problems solved by the 3D simulation: each builds a scene, then measures the asked-for
 // quantity as it runs so the answer can be checked against the textbook one.
 #include "EditorScene3.h"
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -22,12 +23,23 @@ struct Problem {
     const char* answer;
     float expected; // textbook value of the asked-for quantity
     const char* unit;
-    Scene (*setup)();
+    std::function<Scene()> setup;
     Vec3 cameraTarget;
     float cameraDistance, cameraYaw, cameraPitch;
     const char* focus; // object selected on load
     // Called after every step; returns true to pause (the asked-for moment was reached).
-    bool (*monitor)(const Simulation&, ProblemRun&);
+    std::function<bool(const Simulation&, ProblemRun&)> monitor;
+};
+
+// A problem made at run time (e.g. from an uploaded question). It owns the text its problem points
+// into, so it is shared rather than copied.
+struct CustomProblem {
+    std::string name, topic, question, answer, unit, focus;
+    Problem problem{};
+
+    CustomProblem() = default;
+    CustomProblem(const CustomProblem&) = delete;
+    CustomProblem& operator=(const CustomProblem&) = delete;
 };
 
 const std::vector<Problem>& problems();

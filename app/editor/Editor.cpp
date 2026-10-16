@@ -98,7 +98,7 @@ void Editor::loadScene() {
         setStatus("No editor_scene.txt to load");
         return;
     }
-    example_ = -1;
+    clearProblem();
     reset();
     select(0, 0);
     setStatus("Loaded editor_scene.txt");
@@ -106,7 +106,7 @@ void Editor::loadScene() {
 
 void Editor::newScene() {
     scene_ = defaultScene();
-    example_ = -1;
+    clearProblem();
     reset();
     select(0, 0);
 }
@@ -117,13 +117,34 @@ void Editor::openProblem(int index) {
     pending_.clear();
     drag_ = Drag::None;
     lHeld_ = rHeld_ = mHeld_ = false;
-    loadExample(index);
+    custom_.reset();
+    example_ = index;
+    loadExample(examples()[index]);
 }
 
-void Editor::loadExample(int index) {
-    const Example& ex = examples()[index];
+void Editor::openCustom(std::shared_ptr<const CustomExample> problem) {
+    if (!problem) return enter();
+    problemMode_ = true;
+    pending_.clear();
+    drag_ = Drag::None;
+    lHeld_ = rHeld_ = mHeld_ = false;
+    example_ = -1;
+    custom_ = std::move(problem);
+    loadExample(custom_->example);
+}
+
+const Example* Editor::problemDef() const {
+    if (custom_) return &custom_->example;
+    return example_ >= 0 ? &examples()[example_] : nullptr;
+}
+
+void Editor::clearProblem() {
+    example_ = -1;
+    custom_.reset();
+}
+
+void Editor::loadExample(const Example& ex) {
     scene_ = ex.setup();
-    example_ = index;
     showAnswer_ = false;
     reset();
     tool_ = Tool::Select;
@@ -175,7 +196,7 @@ void Editor::stepWorld() {
     energy_.push_back({t, sim_.totalEnergy()});
     if (energy_.size() > kMaxSamples) energy_.pop_front();
 
-    if (example_ >= 0 && examples()[example_].monitor(sim_, exampleRun_)) {
+    if (const Example* ex = problemDef(); ex && ex->monitor(sim_, exampleRun_)) {
         paused_ = true;
         accumulator_ = 0.0f;
         setStatus("The asked-for moment was reached");

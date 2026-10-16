@@ -41,6 +41,7 @@ Editor3::Editor3(Overlay& overlay) : overlay_(overlay), scene_(defaultScene()) {
 
 void Editor3::openSandbox() {
     problem_ = -1;
+    custom_.reset();
     scene_ = defaultScene();
     reset();
     select(0, 0);
@@ -57,8 +58,27 @@ void Editor3::openProblem(int index) {
         openSandbox();
         return;
     }
-    const Problem& p = list[index];
+    custom_.reset();
     problem_ = index;
+    loadProblem(list[index]);
+}
+
+void Editor3::openCustom(std::shared_ptr<const CustomProblem> problem) {
+    if (!problem) {
+        openSandbox();
+        return;
+    }
+    problem_ = -1;
+    custom_ = std::move(problem);
+    loadProblem(custom_->problem);
+}
+
+const Problem* Editor3::problemDef() const {
+    if (custom_) return &custom_->problem;
+    return problem_ >= 0 ? &problems()[problem_] : nullptr;
+}
+
+void Editor3::loadProblem(const Problem& p) {
     scene_ = p.setup();
     showAnswer_ = false;
     reset();
@@ -165,7 +185,7 @@ void Editor3::stepWorld() {
     energy_.push_back({t, sim_.totalEnergy()});
     if (energy_.size() > kMaxSamples) energy_.pop_front();
 
-    if (problem_ >= 0 && problems()[problem_].monitor(sim_, run_)) {
+    if (const Problem* p = problemDef(); p && p->monitor(sim_, run_)) {
         paused_ = true;
         accumulator_ = 0.0f;
         setStatus("The asked-for moment was reached");
@@ -531,13 +551,13 @@ void Editor3::drawToolbar() {
     Ui& ui = overlay_.ui();
     const float W = float(winW_);
     ui.panel({0, 0, W, kTop});
-    if (ui.button({12, 10, 110, kTop - 20}, problem_ >= 0 ? "< Problems" : "< Home", false, 1.25f)) {
+    if (ui.button({12, 10, 110, kTop - 20}, custom_ ? "< Back" : problem_ >= 0 ? "< Problems" : "< Home", false, 1.25f)) {
         exit_ = true;
         return;
     }
     float x = 134.0f;
-    if (problem_ >= 0) {
-        std::string title = std::string("3D problem: ") + problems()[problem_].name;
+    if (problemDef()) {
+        std::string title = std::string("3D problem: ") + problemDef()->name;
         ui.label(x, (kTop - Renderer::textHeight(1.5f)) * 0.5f, title.c_str(), theme::text, 1.5f);
     } else {
         for (int i = 0; i < static_cast<int>(std::size(kToolNames)); ++i) {
@@ -585,7 +605,7 @@ void Editor3::drawToolbar() {
         return clicked;
     };
     if (action("Focus")) focusSelection();
-    if (problem_ < 0 && action("New")) newScene();
+    if (!problemDef() && action("New")) newScene();
 
     char buf[64];
     std::snprintf(buf, sizeof buf, "t = %.3f s", sim_.time());
@@ -605,7 +625,7 @@ void Editor3::drawInspector() {
     ui.panel({x, y, kInspW, H - y - kHint}, {26, 29, 37, 240});
     gfx.fillRect({x, y, 1.0f, H - y - kHint}, theme::border);
     const float inner = kInspW - 28.0f;
-    if (problem_ >= 0) {
+    if (problemDef()) {
         drawProblemPanel(x + 14.0f, y + 12.0f, inner);
         return;
     }
@@ -766,7 +786,7 @@ void Editor3::drawWorldInspector(float x, float y, float w) {
 
 void Editor3::drawProblemPanel(float x, float y, float w) {
     Ui& ui = overlay_.ui();
-    const Problem& p = problems()[problem_];
+    const Problem& p = *problemDef();
     ui.label(x, y, p.topic, theme::accentHover, 1.0f);
     y += 18.0f;
     ui.label(x, y, "Question", theme::text, 1.25f);
@@ -789,8 +809,11 @@ void Editor3::drawProblemPanel(float x, float y, float w) {
     }
     if (run_.done) {
         char buf[96];
-        std::snprintf(buf, sizeof buf, "textbook %.4g %s  (sim %+.2f%%)", p.expected, p.unit,
-                      100.0 * (run_.result - p.expected) / p.expected);
+        if (p.expected != 0.0f)
+            std::snprintf(buf, sizeof buf, "textbook %.4g %s  (sim %+.2f%%)", p.expected, p.unit,
+                          100.0 * (run_.result - p.expected) / p.expected);
+        else
+            std::snprintf(buf, sizeof buf, "textbook %.4g %s", p.expected, p.unit);
         ui.label(x, y + 4.0f, buf, theme::textDim, 1.0f);
         y += 20.0f;
     }
@@ -798,6 +821,7 @@ void Editor3::drawProblemPanel(float x, float y, float w) {
     if (ui.button({x, y, 150.0f, 26.0f}, showAnswer_ ? "Hide solution" : "Show solution", showAnswer_, 1.0f)) showAnswer_ = !showAnswer_;
     if (ui.button({x + 158.0f, y, 150.0f, 26.0f}, "Open in 3D editor", false, 1.0f)) {
         problem_ = -1; // keep the scene, unlock it
+        custom_.reset();
         reset();
         setStatus("Problem opened in the 3D editor: change anything and press Play");
         return;
@@ -899,7 +923,7 @@ void Editor3::drawHints() {
     const char* hint = "";
     if (started_) {
         hint = "SPACE play/pause   . step   R reset   LMB drag a body to pull it   click to inspect   RMB pan   wheel zoom";
-    } else if (problem_ >= 0) {
+    } else if (problemDef()) {
         hint = "SPACE run   R restart   click an object to graph it   LMB drag orbit   RMB pan   wheel zoom   ESC back";
     } else {
         switch (tool_) {

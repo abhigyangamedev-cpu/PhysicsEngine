@@ -1,9 +1,43 @@
 #include "Ui.h"
 #include "Expr.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
+
+namespace {
+
+void popChar(std::string& s) { // one UTF-8 character
+    while (!s.empty() && (static_cast<unsigned char>(s.back()) & 0xc0) == 0x80) s.pop_back();
+    if (!s.empty()) s.pop_back();
+}
+
+// Lines of at most maxChars, breaking at spaces where it can and at explicit newlines.
+std::vector<std::string> wrap(const std::string& text, size_t maxChars) {
+    std::vector<std::string> lines;
+    size_t start = 0;
+    while (start <= text.size()) {
+        size_t end = text.find('\n', start);
+        if (end == std::string::npos) end = text.size();
+        std::string para = text.substr(start, end - start);
+        do {
+            if (para.size() <= maxChars) {
+                lines.push_back(para);
+                break;
+            }
+            size_t cut = para.rfind(' ', maxChars);
+            if (cut == std::string::npos || cut == 0) cut = maxChars;
+            lines.push_back(para.substr(0, cut));
+            para.erase(0, para[cut] == ' ' ? cut + 1 : cut);
+        } while (true);
+        start = end + 1;
+    }
+    return lines;
+}
+
+} // namespace
 
 void Ui::begin(float mouseX, float mouseY, bool clicked) {
     mx_ = mouseX;
@@ -22,9 +56,69 @@ void Ui::textInput(const char* utf8) {
 
 void Ui::keyDown(SDL_Keycode key) {
     if (!editId_) return;
-    if (key == SDLK_BACKSPACE && !buffer_.empty()) buffer_.pop_back();
-    if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_TAB) commit_ = true;
+    const bool enter = key == SDLK_RETURN || key == SDLK_KP_ENTER;
+    if (key == SDLK_BACKSPACE) {
+        popChar(buffer_);
+    } else if (textMode_ && key == SDLK_V && (SDL_GetModState() & SDL_KMOD_CTRL)) {
+        if (char* clip = SDL_GetClipboardText()) {
+            for (const char* c = clip; *c; ++c)
+                if (*c != '\r') buffer_ += multiline_ || *c != '\n' ? *c : ' ';
+            SDL_free(clip);
+        }
+    } else if (textMode_ && multiline_ && enter) {
+        buffer_ += '\n';
+    } else if (enter || key == SDLK_TAB) {
+        commit_ = true;
+    }
     if (key == SDLK_ESCAPE) cancel_ = true;
+}
+
+bool Ui::textArea(SDL_FRect r, int id, std::string& text, const char* placeholder, bool multiline, bool masked,
+                  size_t maxLength) {
+    const bool hot = hovered(r);
+    if (hot) overUi_ = true;
+    bool changed = false;
+    if (editId_ == id) {
+        editSeen_ = true;
+        if (buffer_.size() > maxLength) buffer_.resize(maxLength);
+        if (buffer_ != text) {
+            text = buffer_;
+            changed = true;
+        }
+        if ((clicked_ && !hot) || commit_ || cancel_) {
+            editId_ = 0;
+            commit_ = cancel_ = false;
+            textMode_ = false;
+        }
+    } else if (hot && clicked_) {
+        buffer_ = text;
+        editId_ = id;
+        editSeen_ = true;
+        commit_ = cancel_ = false;
+        textMode_ = true;
+        multiline_ = multiline;
+    }
+
+    const bool active = editId_ == id;
+    gfx_.fillRect(r, active ? Color{14, 16, 21} : (hot ? theme::panelHover : Color{22, 25, 32}));
+    gfx_.strokeRect(r, active ? theme::accentHover : theme::border);
+    const float s = 1.25f, pad = 8.0f, lineH = Renderer::textHeight(s) + 6.0f;
+    if (text.empty() && !active) {
+        if (placeholder && multiline) paragraph(r.x + pad, r.y + pad, r.w - 2 * pad, placeholder, theme::textFaint, s);
+        else if (placeholder) gfx_.text(r.x + pad, r.y + (r.h - Renderer::textHeight(s)) * 0.5f, placeholder, theme::textFaint, s);
+        return changed;
+    }
+    std::string shown = masked ? std::string(text.size(), '*') : text;
+    if (active) shown += '_';
+    const size_t perLine = std::max<size_t>(1, static_cast<size_t>((r.w - 2 * pad) / Renderer::textWidth("M", s)));
+    std::vector<std::string> lines = multiline ? wrap(shown, perLine) : std::vector<std::string>{shown};
+    if (!multiline && shown.size() > perLine) lines[0] = shown.substr(shown.size() - perLine); // keep the end in view
+    const size_t fit = std::max<size_t>(1, static_cast<size_t>((r.h - 2 * pad + 6.0f) / lineH));
+    const size_t first = active && lines.size() > fit ? lines.size() - fit : 0; // typing: follow the cursor
+    const float y0 = multiline ? r.y + pad : r.y + (r.h - Renderer::textHeight(s)) * 0.5f;
+    for (size_t i = first; i < lines.size() && i < first + fit; ++i)
+        gfx_.text(r.x + pad, y0 + (i - first) * lineH, lines[i].c_str(), theme::text, s);
+    return changed;
 }
 
 bool Ui::numberField(SDL_FRect r, int id, float& value, float step, bool enabled) {
@@ -47,6 +141,7 @@ bool Ui::numberField(SDL_FRect r, int id, float& value, float step, bool enabled
             commit_ = cancel_ = false;
         }
     } else if (enabled && hot && clicked_) {
+        textMode_ = false;
         char buf[32];
         std::snprintf(buf, sizeof buf, "%.6g", value);
         buffer_ = buf;

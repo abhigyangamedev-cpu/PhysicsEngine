@@ -5,6 +5,7 @@
 #include "editor/Examples.h"
 #include "editor/Simulation.h"
 #include <deque>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -27,6 +28,7 @@ public:
     Editor(Renderer& gfx, Ui& ui, Camera& cam);
     void enter(); // the sandbox
     void openProblem(int index);
+    void openCustom(std::shared_ptr<const CustomExample> problem); // a problem made at run time
     bool inProblem() const { return problemMode_; }
 
     // read-only views for the UI tests
@@ -59,7 +61,8 @@ private:
     bool showGrid_ = true, showLabels_ = true, showVel_ = true, showAcc_ = false, showForce_ = true;
     bool showTrails_ = false, showGraph_ = true;
     Plot plot_ = Plot::Speed;
-    int example_ = -1;          // the problem being shown or run, -1 = none
+    int example_ = -1;          // the built-in problem being shown or run, -1 = none
+    std::shared_ptr<const CustomExample> custom_; // or this one, made at run time
     bool problemMode_ = false;  // showing example_ as a locked real-life problem
     bool showAnswer_ = false;
     ExampleRun exampleRun_;
@@ -113,7 +116,9 @@ private:
     void drawLinkInspector(LinkSpec& l, float x, float y, float w);
     void drawWorldInspector(float x, float y, float w);
     void drawProblemPanel(float x, float y, float w);
-    void loadExample(int index);
+    void loadExample(const Example& ex);
+    const Example* problemDef() const; // the problem being shown or run, if any
+    void clearProblem();
     bool locked() const { return started_ || problemMode_; }
     void drawGraph();
     void drawHints();
